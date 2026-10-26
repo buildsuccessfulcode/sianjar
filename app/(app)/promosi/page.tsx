@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import {
   AlertTriangle,
   ArrowRight,
@@ -18,8 +19,14 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { ConfirmSubmit } from "@/components/ui/confirm-submit";
+import { FilterBar } from "@/components/ui/filter-bar";
 import { Checkbox, Field, Select } from "@/components/ui/form";
+import { HiddenParams } from "@/components/ui/hidden-params";
+import { ListQueryHidden } from "@/components/ui/list-query-hidden";
 import { PageHeader } from "@/components/ui/page-header";
+import { Pagination } from "@/components/ui/pagination";
+import { SearchField } from "@/components/ui/search-field";
+import { SortableHead } from "@/components/ui/sortable-head";
 import {
   Table,
   TableBody,
@@ -35,13 +42,21 @@ import {
 import {
   getPromotionBatch,
   getPromotionPreview,
-  listPromotionBatches,
+  listPromotionBatchesPaged,
 } from "@/data-access/promotions";
 import {
   PROMOTION_ACTION_LABELS,
   type PromotionAction,
+  type PromotionBatchStatus,
 } from "@/db/schema/enums";
 import { formatDateTimeId } from "@/lib/date";
+import {
+  buildListHref,
+  parsePage,
+  parsePerPage,
+  resolveDirection,
+  resolveSort,
+} from "@/lib/pagination";
 import { requirePagePermission } from "@/lib/dal";
 import { hasPermission } from "@/lib/permissions";
 import { BATCH_VARIANTS } from "@/lib/status";
@@ -51,11 +66,20 @@ import { cancelBatch, runPromotion } from "./actions";
 export const metadata: Metadata = { title: "Naik Kelas" };
 export const dynamic = "force-dynamic";
 
-type SearchParams = Promise<{
-  from?: string;
-  to?: string;
-  batch?: string;
-}>;
+type SearchParams = Promise<Record<string, string | string[] | undefined>>;
+
+const BATCH_STATUS_LABELS: Record<PromotionBatchStatus, string> = {
+  DRAFT: "Draf",
+  COMMITTED: "Selesai",
+  CANCELLED: "Dibatalkan",
+};
+const batchStatusOptions = [
+  "DRAFT",
+  "COMMITTED",
+  "CANCELLED",
+] as const;
+const sortOptions = ["createdAt", "status", "transition"] as const;
+const BASE_PATH = "/promosi";
 
 function summaryValue(summary: unknown, key: string) {
   if (summary && typeof summary === "object" && key in summary) {
@@ -72,10 +96,33 @@ export default async function PromotionPage({
 }) {
   const user = await requirePagePermission("manage:promotion_rules");
   const params = await searchParams;
-  const [years, activeYear, history] = await Promise.all([
+
+  const q = typeof params.q === "string" ? params.q : undefined;
+  const batchStatus: PromotionBatchStatus | undefined =
+    typeof params.status === "string" &&
+    batchStatusOptions.includes(params.status as PromotionBatchStatus)
+      ? (params.status as PromotionBatchStatus)
+      : undefined;
+  const sort = resolveSort(params.sort, sortOptions, "createdAt");
+  const dir = resolveDirection(params.dir, "desc");
+  const page = parsePage(params.page);
+  const perPage = parsePerPage(params.perPage);
+  const fromParam = typeof params.from === "string" ? params.from : undefined;
+  const toParam = typeof params.to === "string" ? params.to : undefined;
+  const batchId = typeof params.batch === "string" ? params.batch : undefined;
+  const returnTo = buildListHref(BASE_PATH, params);
+
+  const [years, activeYear, historyResult] = await Promise.all([
     listAcademicYears(),
     getActiveAcademicYear(),
-    listPromotionBatches(),
+    listPromotionBatchesPaged({
+      q,
+      status: batchStatus,
+      sort,
+      dir,
+      page,
+      perPage,
+    }),
   ]);
 
   const defaultFrom = activeYear ?? years[1] ?? years[0] ?? null;
@@ -85,8 +132,8 @@ export default async function PromotionPage({
   const defaultTo =
     defaultFromIndex > 0 ? years[defaultFromIndex - 1] : years[0] ?? null;
 
-  const fromId = params.from ?? defaultFrom?.id ?? "";
-  const toId = params.to ?? defaultTo?.id ?? "";
+  const fromId = fromParam ?? defaultFrom?.id ?? "";
+  const toId = toParam ?? defaultTo?.id ?? "";
 
   const preview =
     fromId && toId && fromId !== toId
@@ -95,7 +142,7 @@ export default async function PromotionPage({
         }))
       : null;
 
-  const batch = params.batch ? await getPromotionBatch(params.batch) : null;
+  const batch = batchId ? await getPromotionBatch(batchId) : null;
   const canExecute = hasPermission(user.roles, "execute:promotion");
   const canCancel = hasPermission(user.roles, "cancel:promotion_batch");
 
@@ -142,6 +189,7 @@ export default async function PromotionPage({
             !batch.toYearActive ? (
               <form action={cancelBatch}>
                 <input type="hidden" name="id" value={batch.id} />
+                <input type="hidden" name="returnTo" value={returnTo} />
                 <ConfirmSubmit
                   variant="danger"
                   message="Batalkan batch ini? Enrollment baru akan dihapus dan enrollment asal dikembalikan ke ACTIVE."
@@ -171,6 +219,16 @@ export default async function PromotionPage({
         </CardHeader>
         <CardContent>
           <form method="get" className="grid gap-3 md:grid-cols-3">
+            <HiddenParams
+              params={{
+                q,
+                status: batchStatus,
+                sort,
+                dir,
+                page,
+                perPage,
+              }}
+            />
             <Field label="Dari" htmlFor="from">
               <Select id="from" name="from" defaultValue={fromId}>
                 {years.map((year) => (
@@ -317,6 +375,7 @@ export default async function PromotionPage({
                     submitLabel="Commit Promosi"
                     pendingText="Memproses siswa..."
                   >
+                    <input type="hidden" name="returnTo" value={returnTo} />
                     <input
                       type="hidden"
                       name="fromAcademicYearId"
@@ -346,28 +405,75 @@ export default async function PromotionPage({
         </div>
       ) : null}
 
+      <FilterBar
+        title="Filter Riwayat Batch"
+        resetHref={BASE_PATH}
+        description="Cari transisi tahun ajaran dan saring status batch."
+        formClassName="sm:grid-cols-2 lg:grid-cols-4"
+      >
+        <ListQueryHidden perPage={perPage} sort={sort} dir={dir} />
+        <HiddenParams params={{ from: fromId, to: toId, batch: batchId }} />
+        <SearchField
+          defaultValue={q}
+          placeholder="Cari tahun ajaran asal/tujuan..."
+        />
+        <Field label="Status" htmlFor="status">
+          <Select id="status" name="status" defaultValue={batchStatus ?? ""}>
+            <option value="">Semua status</option>
+            {batchStatusOptions.map((value) => (
+              <option key={value} value={value}>
+                {BATCH_STATUS_LABELS[value]}
+              </option>
+            ))}
+          </Select>
+        </Field>
+      </FilterBar>
+
       <div className="space-y-3">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+        <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-500">
           Riwayat Batch
+          <Badge variant="neutral">{historyResult.total} data</Badge>
         </h2>
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Transisi</TableHead>
-              <TableHead>Status</TableHead>
+              <SortableHead
+                label="Transisi"
+                column="transition"
+                currentSort={sort}
+                currentDir={dir}
+                basePath={BASE_PATH}
+                searchParams={params}
+              />
+              <SortableHead
+                label="Status"
+                column="status"
+                currentSort={sort}
+                currentDir={dir}
+                basePath={BASE_PATH}
+                searchParams={params}
+              />
               <TableHead>Ringkasan</TableHead>
-              <TableHead>Waktu</TableHead>
+              <SortableHead
+                label="Waktu"
+                column="createdAt"
+                currentSort={sort}
+                currentDir={dir}
+                basePath={BASE_PATH}
+                searchParams={params}
+              />
+              <TableHead className="text-right">Aksi</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {history.map((row) => (
+            {historyResult.rows.map((row) => (
               <TableRow key={row.id}>
                 <TableCell>
                   {row.fromYearName} → {row.toYearName}
                 </TableCell>
                 <TableCell>
                   <Badge variant={BATCH_VARIANTS[row.status]}>
-                    {row.status}
+                    {BATCH_STATUS_LABELS[row.status]}
                   </Badge>
                 </TableCell>
                 <TableCell className="text-xs text-slate-600">
@@ -382,17 +488,37 @@ export default async function PromotionPage({
                       ? `Dibatalkan ${formatDateTimeId(row.cancelledAt)}`
                       : "—"}
                 </TableCell>
+                <TableCell className="text-right">
+                  <Link
+                    href={buildListHref(BASE_PATH, params, {
+                      batch: row.id,
+                    })}
+                    className="text-sm font-medium text-indigo-600 hover:text-indigo-800"
+                  >
+                    Lihat
+                  </Link>
+                </TableCell>
               </TableRow>
             ))}
-            {history.length === 0 ? (
+            {historyResult.rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={4} className="text-center text-slate-500">
-                  Belum ada batch promosi.
+                <TableCell colSpan={5} className="text-center text-slate-500">
+                  Tidak ada batch promosi pada filter ini.
                 </TableCell>
               </TableRow>
             ) : null}
           </TableBody>
         </Table>
+        <Pagination
+          basePath={BASE_PATH}
+          searchParams={params}
+          page={historyResult.page}
+          perPage={historyResult.perPage}
+          total={historyResult.total}
+          totalPages={historyResult.totalPages}
+          from={historyResult.from}
+          to={historyResult.to}
+        />
       </div>
     </div>
   );

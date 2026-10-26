@@ -5,11 +5,16 @@ import { redirect } from "next/navigation";
 
 import {
   addTeacherSubject,
+  addTeacherSubjectsBulk,
   removeTeacherSubject,
 } from "@/data-access/master";
 import { assertPermission } from "@/lib/dal";
 import { errorMessage } from "@/lib/errors";
-import { teacherSubjectSchema } from "@/lib/validators/master";
+import { redirectWithFlash } from "@/lib/redirect";
+import {
+  teacherSubjectBulkSchema,
+  teacherSubjectSchema,
+} from "@/lib/validators/master";
 import type { ActionState } from "@/lib/validators/common";
 
 const PATH = "/guru-mapel";
@@ -38,7 +43,43 @@ export async function addMapping(
 
   revalidatePath(PATH);
   revalidatePath("/jadwal");
-  redirect(`${PATH}?success=${encodeURIComponent("Mapping berhasil ditambahkan.")}`);
+  redirect(
+    redirectWithFlash(formData, PATH, "success", "Mapping berhasil ditambahkan."),
+  );
+}
+
+export async function addMappingsBulk(
+  _state: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  let result: Awaited<ReturnType<typeof addTeacherSubjectsBulk>>;
+  try {
+    await assertPermission("manage:mapping_guru_mapel");
+    const parsed = teacherSubjectBulkSchema.safeParse({
+      teacherId: formData.get("teacherId"),
+      subjectIds: formData.getAll("subjectIds").map(String),
+    });
+    if (!parsed.success) {
+      return {
+        status: "error",
+        message: parsed.error.issues[0]?.message ?? "Pilih guru dan mapel.",
+        fieldErrors: parsed.error.flatten().fieldErrors,
+      };
+    }
+    result = await addTeacherSubjectsBulk(parsed.data);
+  } catch (error) {
+    return { status: "error", message: errorMessage(error) };
+  }
+
+  revalidatePath(PATH);
+  revalidatePath("/jadwal");
+
+  const parts = [
+    `${result.created} mapping ditambahkan`,
+    result.skipped > 0 ? `${result.skipped} sudah ada` : undefined,
+  ].filter(Boolean);
+
+  return { status: "success", message: `${parts.join(", ")}.` };
 }
 
 export async function removeMapping(formData: FormData) {
@@ -49,8 +90,8 @@ export async function removeMapping(formData: FormData) {
       String(formData.get("subjectId")),
     );
   } catch (error) {
-    redirect(`${PATH}?error=${encodeURIComponent(errorMessage(error))}`);
+    redirect(redirectWithFlash(formData, PATH, "error", errorMessage(error)));
   }
   revalidatePath(PATH);
-  redirect(`${PATH}?success=${encodeURIComponent("Mapping dihapus.")}`);
+  redirect(redirectWithFlash(formData, PATH, "success", "Mapping dihapus."));
 }

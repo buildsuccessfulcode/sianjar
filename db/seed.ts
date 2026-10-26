@@ -15,144 +15,105 @@ import {
   students,
   subjects,
   teacherProfiles,
-  timeSlots,
   teacherSubjects,
+  timeSlots,
   userRoles,
   users,
 } from "@/db/schema";
+import {
+  ACADEMIC_YEAR,
+  CLASSES,
+  DEPARTMENTS,
+  HOMEROOM_STAFF,
+  SCHEDULES,
+  SEMESTER,
+  SUBJECTS,
+  TEACHERS,
+  TIME_SLOTS,
+} from "@/db/seed-data/jadwal-2026-2027";
 import { getDbPool } from "@/lib/db";
-import { DEFAULT_TIME_SLOTS } from "@/lib/default-time-slots";
-import { dayOfWeekFromDate, todayInJakarta } from "@/lib/date";
 
 const DEFAULT_PASSWORD = process.env.SEED_ADMIN_PASSWORD ?? "Admin123!";
 const ADMIN_EMAIL = process.env.SEED_ADMIN_EMAIL ?? "admin@sekolah.sch.id";
+const WAKA_EMAIL = "waka@sekolah.sch.id";
+
+const STUDENT_SEEDS: { name: string; gender: "L" | "P" }[] = [
+  { name: "Ahmad Fauzi", gender: "L" },
+  { name: "Budi Santoso", gender: "L" },
+  { name: "Citra Dewi", gender: "P" },
+  { name: "Dewi Lestari", gender: "P" },
+  { name: "Eko Saputra", gender: "L" },
+  { name: "Fitri Handayani", gender: "P" },
+  { name: "Gilang Ramadhan", gender: "L" },
+  { name: "Hana Permata", gender: "P" },
+  { name: "Indra Gunawan", gender: "L" },
+  { name: "Jihan Aulia", gender: "P" },
+  { name: "Kevin Pratama", gender: "L" },
+  { name: "Lina Marlina", gender: "P" },
+  { name: "Muhammad Rizky", gender: "L" },
+  { name: "Nabila Putri", gender: "P" },
+  { name: "Oscar Mahendra", gender: "L" },
+  { name: "Putri Anjani", gender: "P" },
+  { name: "Qori Ramadhan", gender: "L" },
+  { name: "Rina Wulandari", gender: "P" },
+  { name: "Sinta Dewi", gender: "P" },
+  { name: "Taufik Hidayat", gender: "L" },
+  { name: "Umar Faruq", gender: "L" },
+  { name: "Vina Oktaviani", gender: "P" },
+  { name: "Wahyu Setiawan", gender: "L" },
+  { name: "Xena Amelia", gender: "P" },
+  { name: "Yogi Pratama", gender: "L" },
+  { name: "Zahra Nabila", gender: "P" },
+  { name: "Arif Budiman", gender: "L" },
+  { name: "Bunga Citra", gender: "P" },
+  { name: "Candra Wijaya", gender: "L" },
+  { name: "Dina Ayu", gender: "P" },
+];
 
 async function main() {
   const passwordHash = await bcrypt.hash(DEFAULT_PASSWORD, 10);
-  const today = todayInJakarta();
-  const dayOfWeek = dayOfWeekFromDate(today);
-
   const db = getDbPool();
 
   await db.transaction(async (tx) => {
     const existing = await tx.select({ id: users.id }).from(users).limit(1);
     if (existing.length > 0) {
-      console.log("Seed dilewati: database sudah memiliki data pengguna.");
+      console.log(
+        "Seed dilewati: database sudah memiliki data pengguna. Gunakan database kosong untuk menerapkan seed ini.",
+      );
       return;
     }
 
-    const [year2025] = await tx
+    const [year] = await tx
       .insert(academicYears)
       .values({
-        name: "2025/2026",
-        startDate: "2025-07-14",
-        endDate: "2026-06-30",
-        isActive: false,
-      })
-      .returning();
-
-    const [year2026] = await tx
-      .insert(academicYears)
-      .values({
-        name: "2026/2027",
-        startDate: "2026-07-13",
-        endDate: "2027-06-30",
+        name: ACADEMIC_YEAR.name,
+        startDate: ACADEMIC_YEAR.startDate,
+        endDate: ACADEMIC_YEAR.endDate,
         isActive: true,
       })
       .returning();
 
-    const [year2027] = await tx
-      .insert(academicYears)
+    const [semester] = await tx
+      .insert(semesters)
       .values({
-        name: "2027/2028",
-        startDate: "2027-07-12",
-        endDate: "2028-06-30",
-        isActive: false,
+        academicYearId: year.id,
+        name: SEMESTER.name,
+        startDate: SEMESTER.startDate,
+        endDate: SEMESTER.endDate,
+        isActive: true,
       })
       .returning();
 
-    await tx.insert(semesters).values([
-      {
-        academicYearId: year2025.id,
-        name: "GANJIL",
-        startDate: "2025-07-14",
-        endDate: "2025-12-31",
-        isActive: false,
-      },
-      {
-        academicYearId: year2025.id,
-        name: "GENAP",
-        startDate: "2026-01-05",
-        endDate: "2026-06-30",
-        isActive: false,
-      },
-      {
-        academicYearId: year2026.id,
-        name: "GANJIL",
-        startDate: "2026-07-13",
-        endDate: "2026-12-31",
-        isActive: true,
-      },
-      {
-        academicYearId: year2026.id,
-        name: "GENAP",
-        startDate: "2027-01-04",
-        endDate: "2027-06-30",
-        isActive: false,
-      },
-      {
-        academicYearId: year2027.id,
-        name: "GANJIL",
-        startDate: "2027-07-12",
-        endDate: "2027-12-31",
-        isActive: false,
-      },
-    ]);
-
-    const [activeSemester] = await tx
-      .select()
-      .from(semesters)
-      .where(
-        and(
-          eq(semesters.academicYearId, year2026.id),
-          eq(semesters.name, "GANJIL"),
-        ),
-      )
-      .limit(1);
-
-    await tx.insert(timeSlots).values(
-      DEFAULT_TIME_SLOTS.map((slot) => ({
-        ...slot,
-        semesterId: activeSemester.id,
-        periodNumber: slot.kind === "LESSON" ? slot.periodNumber : null,
-      })),
+    const departmentRows = await tx
+      .insert(departments)
+      .values(DEPARTMENTS)
+      .returning();
+    const departmentByCode = new Map(
+      departmentRows.map((row) => [row.code, row]),
     );
 
-    const [ipa] = await tx
-      .insert(departments)
-      .values({ code: "IPA", name: "Ilmu Pengetahuan Alam" })
-      .returning();
-    const [ips] = await tx
-      .insert(departments)
-      .values({ code: "IPS", name: "Ilmu Pengetahuan Sosial" })
-      .returning();
-
-    const [mtk] = await tx
-      .insert(subjects)
-      .values({ code: "MTK", name: "Matematika" })
-      .returning();
-    const [fis] = await tx
-      .insert(subjects)
-      .values({ code: "FIS", name: "Fisika" })
-      .returning();
-    const [bin] = await tx
-      .insert(subjects)
-      .values({ code: "BIN", name: "Bahasa Indonesia" })
-      .returning();
-    const [bio] = await tx
-      .insert(subjects)
-      .values({ code: "BIO", name: "Biologi" })
-      .returning();
+    const subjectRows = await tx.insert(subjects).values(SUBJECTS).returning();
+    const subjectByCode = new Map(subjectRows.map((row) => [row.code, row]));
 
     const [admin] = await tx
       .insert(users)
@@ -162,212 +123,175 @@ async function main() {
         passwordHash,
       })
       .returning();
+
     const [waka] = await tx
       .insert(users)
       .values({
-        name: "Rina Waka Kurikulum",
-        email: "waka@sekolah.sch.id",
+        name: "Waka Kurikulum",
+        email: WAKA_EMAIL,
         passwordHash,
       })
       .returning();
-    const [sari] = await tx
+
+    const teacherAccounts = [...TEACHERS, ...HOMEROOM_STAFF];
+    const teacherRows = await tx
       .insert(users)
-      .values({
-        name: "Sari Wulandari",
-        email: "sari@sekolah.sch.id",
-        passwordHash,
-      })
+      .values(
+        teacherAccounts.map((teacher) => ({
+          name: teacher.name,
+          email: teacher.email,
+          passwordHash,
+        })),
+      )
       .returning();
-    const [andi] = await tx
-      .insert(users)
-      .values({
-        name: "Andi Pratama",
-        email: "andi@sekolah.sch.id",
-        passwordHash,
-      })
-      .returning();
+    const userByEmail = new Map(teacherRows.map((row) => [row.email, row]));
+    const teacherByKey = new Map(
+      teacherAccounts.map((teacher) => [
+        teacher.key,
+        userByEmail.get(teacher.email)!,
+      ]),
+    );
 
     await tx.insert(userRoles).values([
       { userId: admin.id, role: "ADMIN" },
       { userId: waka.id, role: "WAKA_KURIKULUM" },
       { userId: waka.id, role: "GURU" },
-      { userId: sari.id, role: "GURU" },
-      { userId: andi.id, role: "GURU" },
+      ...teacherRows.map((row) => ({ userId: row.id, role: "GURU" as const })),
     ]);
 
     await tx.insert(teacherProfiles).values([
-      { userId: waka.id, nip: "198001012005012001" },
-      { userId: sari.id, nip: "198702022010012002" },
-      { userId: andi.id, nip: "199003032015011003" },
+      { userId: waka.id },
+      ...teacherRows.map((row) => ({ userId: row.id })),
     ]);
 
-    await tx.insert(teacherSubjects).values([
-      { teacherId: waka.id, subjectId: mtk.id },
-      { teacherId: sari.id, subjectId: mtk.id },
-      { teacherId: sari.id, subjectId: bin.id },
-      { teacherId: andi.id, subjectId: fis.id },
-      { teacherId: andi.id, subjectId: bio.id },
-    ]);
+    const teacherSubjectValues = TEACHERS.flatMap((teacher) =>
+      teacher.subjects.map((subjectCode) => ({
+        teacherId: teacherByKey.get(teacher.key)!.id,
+        subjectId: subjectByCode.get(subjectCode)!.id,
+      })),
+    );
+    await tx.insert(teacherSubjects).values(teacherSubjectValues);
 
-    const activeClasses = await tx
+    const classRows = await tx
       .insert(classes)
-      .values([
-        {
-          academicYearId: year2026.id,
-          departmentId: ipa.id,
-          gradeLevel: 10,
-          section: "1",
-          homeroomTeacherId: sari.id,
-        },
-        {
-          academicYearId: year2026.id,
-          departmentId: ips.id,
-          gradeLevel: 10,
-          section: "1",
-          homeroomTeacherId: andi.id,
-        },
-        {
-          academicYearId: year2026.id,
-          departmentId: ipa.id,
-          gradeLevel: 11,
-          section: "1",
-          homeroomTeacherId: waka.id,
-        },
-        {
-          academicYearId: year2026.id,
-          departmentId: ipa.id,
-          gradeLevel: 12,
-          section: "1",
-        },
-      ])
+      .values(
+        CLASSES.map((item) => ({
+          academicYearId: year.id,
+          departmentId: departmentByCode.get(item.departmentCode)!.id,
+          gradeLevel: item.gradeLevel,
+          section: item.section,
+          homeroomTeacherId: item.homeroomTeacherKey
+            ? teacherByKey.get(item.homeroomTeacherKey)!.id
+            : null,
+        })),
+      )
       .returning();
+    const classBySlot = new Map(
+      classRows.map((row) => [
+        `${row.departmentId}|${row.gradeLevel}|${row.section}`,
+        row,
+      ]),
+    );
+    const classByKey = new Map(
+      CLASSES.map((item) => [
+        item.key,
+        classBySlot.get(
+          `${departmentByCode.get(item.departmentCode)!.id}|${item.gradeLevel}|${item.section}`,
+        )!,
+      ]),
+    );
 
-    const nextClasses = await tx
-      .insert(classes)
-      .values([
-        {
-          academicYearId: year2027.id,
-          departmentId: ipa.id,
-          gradeLevel: 11,
-          section: "1",
-        },
-        {
-          academicYearId: year2027.id,
-          departmentId: ips.id,
-          gradeLevel: 11,
-          section: "1",
-        },
-        {
-          academicYearId: year2027.id,
-          departmentId: ipa.id,
-          gradeLevel: 12,
-          section: "1",
-        },
-      ])
-      .returning();
-
-    void nextClasses;
-
-    const class10Ipa = activeClasses[0];
-    const class10Ips = activeClasses[1];
-    const class11Ipa = activeClasses[2];
-    const class12Ipa = activeClasses[3];
+    await tx.insert(timeSlots).values(
+      TIME_SLOTS.map((slot) => ({
+        semesterId: semester.id,
+        label: slot.label,
+        kind: slot.kind,
+        periodNumber: slot.kind === "LESSON" ? slot.periodNumber : null,
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+      })),
+    );
 
     const studentRows = await tx
       .insert(students)
-      .values([
-        { nisn: "0051000001", name: "Ahmad Fauzi", gender: "L", birthDate: "2009-01-12" },
-        { nisn: "0051000002", name: "Budi Santoso", gender: "L", birthDate: "2009-03-04" },
-        { nisn: "0051000003", name: "Citra Dewi", gender: "P", birthDate: "2009-05-21" },
-        { nisn: "0051000004", name: "Dewi Lestari", gender: "P", birthDate: "2009-08-09" },
-        { nisn: "0051000005", name: "Eko Saputra", gender: "L", birthDate: "2008-11-30" },
-        { nisn: "0051000006", name: "Fitri Handayani", gender: "P", birthDate: "2008-02-14" },
-        { nisn: "0051000007", name: "Gilang Ramadhan", gender: "L", birthDate: "2007-07-07" },
-        { nisn: "0051000008", name: "Hana Permata", gender: "P", birthDate: "2007-12-01" },
-      ])
+      .values(
+        STUDENT_SEEDS.map((student, index) => ({
+          nisn: `00610000${String(index + 1).padStart(2, "0")}`,
+          name: student.name,
+          gender: student.gender,
+        })),
+      )
       .returning();
+    const studentByNisn = new Map(studentRows.map((row) => [row.nisn, row]));
 
-    await tx.insert(studentEnrollments).values([
-      { studentId: studentRows[0].id, classId: class10Ipa.id, academicYearId: year2026.id },
-      { studentId: studentRows[1].id, classId: class10Ipa.id, academicYearId: year2026.id },
-      { studentId: studentRows[2].id, classId: class10Ipa.id, academicYearId: year2026.id },
-      { studentId: studentRows[3].id, classId: class10Ips.id, academicYearId: year2026.id },
-      { studentId: studentRows[4].id, classId: class10Ips.id, academicYearId: year2026.id },
-      { studentId: studentRows[5].id, classId: class11Ipa.id, academicYearId: year2026.id },
-      { studentId: studentRows[6].id, classId: class11Ipa.id, academicYearId: year2026.id },
-      { studentId: studentRows[7].id, classId: class12Ipa.id, academicYearId: year2026.id },
-    ]);
+    const enrollmentValues = CLASSES.flatMap((item, classIndex) =>
+      STUDENT_SEEDS.slice(classIndex * 5, classIndex * 5 + 5).map(
+        (student, studentIndex) => {
+          const nisn = `00610000${String(classIndex * 5 + studentIndex + 1).padStart(2, "0")}`;
+          return {
+            studentId: studentByNisn.get(nisn)!.id,
+            classId: classByKey.get(item.key)!.id,
+            academicYearId: year.id,
+          };
+        },
+      ),
+    );
+    await tx.insert(studentEnrollments).values(enrollmentValues);
 
-    const scheduleRows = await tx
-      .insert(schedules)
-      .values([
-        {
-          semesterId: activeSemester.id,
-          teacherId: sari.id,
-          subjectId: mtk.id,
-          classId: class10Ipa.id,
-          dayOfWeek,
-          periodStart: 1,
-          periodEnd: 2,
-          room: "Ruang 10 IPA 1",
-        },
-        {
-          semesterId: activeSemester.id,
-          teacherId: andi.id,
-          subjectId: fis.id,
-          classId: class11Ipa.id,
-          dayOfWeek: (dayOfWeek % 7) + 1,
-          periodStart: 3,
-          periodEnd: 4,
-          room: "Lab Fisika",
-        },
-        {
-          semesterId: activeSemester.id,
-          teacherId: waka.id,
-          subjectId: mtk.id,
-          classId: class12Ipa.id,
-          dayOfWeek: ((dayOfWeek + 1) % 7) + 1,
-          periodStart: 1,
-          periodEnd: 2,
-          room: "Ruang 12 IPA 1",
-        },
-        {
-          semesterId: activeSemester.id,
-          teacherId: sari.id,
-          subjectId: bin.id,
-          classId: class10Ips.id,
-          dayOfWeek: ((dayOfWeek + 2) % 7) + 1,
-          periodStart: 6,
-          periodEnd: 7,
-          room: "Ruang 10 IPS 1",
-        },
-      ])
-      .returning();
+    const scheduleValues = SCHEDULES.map((item) => ({
+      semesterId: semester.id,
+      teacherId: teacherByKey.get(item.teacherKey)!.id,
+      subjectId: subjectByCode.get(item.subjectCode)!.id,
+      classId: classByKey.get(item.classKey)!.id,
+      dayOfWeek: item.dayOfWeek,
+      periodStart: item.periodStart,
+      periodEnd: item.periodEnd,
+    }));
+    await tx.insert(schedules).values(scheduleValues);
+
+    const firstSchedule = SCHEDULES[0];
+    const [sampleSchedule] = await tx
+      .select()
+      .from(schedules)
+      .where(
+        and(
+          eq(schedules.semesterId, semester.id),
+          eq(schedules.classId, classByKey.get(firstSchedule.classKey)!.id),
+          eq(schedules.dayOfWeek, firstSchedule.dayOfWeek),
+          eq(schedules.periodStart, firstSchedule.periodStart),
+        ),
+      )
+      .limit(1);
 
     const [journal] = await tx
       .insert(journals)
       .values({
-        scheduleId: scheduleRows[0].id,
-        date: today,
-        teacherId: sari.id,
-        material: "Persamaan linear dua variabel",
-        activity: "Diskusi kelompok dan latihan soal",
-        notes: "Kelas kondusif.",
-        createdBy: sari.id,
+        scheduleId: sampleSchedule.id,
+        date: SEMESTER.startDate,
+        teacherId: sampleSchedule.teacherId,
+        material: "Orientasi dan kontrak belajar",
+        activity: "Pengenalan materi dan kesepakatan kelas",
+        notes: "Contoh jurnal dari seed.",
+        createdBy: sampleSchedule.teacherId,
       })
       .returning();
 
     await tx.insert(attendanceRecords).values({
       journalId: journal.id,
-      studentId: studentRows[1].id,
+      studentId: studentByNisn.get("0061000001")!.id,
       status: "IZIN",
-      note: "Mengikuti lomba olimpiade.",
+      note: "Contoh ketidakhadiran.",
     });
 
     console.log("Seed selesai.");
     console.log(`Admin: ${ADMIN_EMAIL} / ${DEFAULT_PASSWORD}`);
-    console.log("Waka: waka@sekolah.sch.id / password yang sama");
-    console.log("Guru: sari@sekolah.sch.id, andi@sekolah.sch.id / password yang sama");
+    console.log(`Waka: ${WAKA_EMAIL} / ${DEFAULT_PASSWORD}`);
+    console.log(
+      `Guru: ${TEACHERS.length} akun mengajar + ${HOMEROOM_STAFF.length} wali kelas @sekolah.sch.id / ${DEFAULT_PASSWORD}`,
+    );
+    console.log(
+      `Jadwal: ${ACADEMIC_YEAR.name} ${SEMESTER.name}, ${CLASSES.length} kelas, ${SCHEDULES.length} blok.`,
+    );
   });
 }
 
@@ -377,4 +301,3 @@ main()
     console.error(error);
     process.exit(1);
   });
-

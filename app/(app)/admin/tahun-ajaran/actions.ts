@@ -14,6 +14,7 @@ import {
 } from "@/data-access/master";
 import { assertPermission } from "@/lib/dal";
 import { errorMessage } from "@/lib/errors";
+import { redirectWithFlash } from "@/lib/redirect";
 import {
   academicYearSchema,
   semesterSchema,
@@ -55,9 +56,14 @@ export async function saveAcademicYear(
 
   revalidate();
   redirect(
-    `${PATH}?success=${encodeURIComponent(
-      id ? "Tahun ajaran berhasil diperbarui." : "Tahun ajaran berhasil ditambahkan.",
-    )}`,
+    redirectWithFlash(
+      formData,
+      PATH,
+      "success",
+      id
+        ? "Tahun ajaran berhasil diperbarui."
+        : "Tahun ajaran berhasil ditambahkan.",
+    ),
   );
 }
 
@@ -89,9 +95,12 @@ export async function saveSemester(
 
   revalidate();
   redirect(
-    `${PATH}?success=${encodeURIComponent(
+    redirectWithFlash(
+      formData,
+      PATH,
+      "success",
       id ? "Semester berhasil diperbarui." : "Semester berhasil ditambahkan.",
-    )}`,
+    ),
   );
 }
 
@@ -100,11 +109,11 @@ export async function activateYear(formData: FormData) {
     const user = await assertPermission("manage:master_data");
     await activateAcademicYear(String(formData.get("id")), user.id);
   } catch (error) {
-    redirect(`${PATH}?error=${encodeURIComponent(errorMessage(error))}`);
+    redirect(redirectWithFlash(formData, PATH, "error", errorMessage(error)));
   }
   revalidate();
   redirect(
-    `${PATH}?success=${encodeURIComponent("Tahun ajaran diaktifkan.")}`,
+    redirectWithFlash(formData, PATH, "success", "Tahun ajaran diaktifkan."),
   );
 }
 
@@ -113,10 +122,10 @@ export async function activateSemesterAction(formData: FormData) {
     const user = await assertPermission("manage:master_data");
     await activateSemester(String(formData.get("id")), user.id);
   } catch (error) {
-    redirect(`${PATH}?error=${encodeURIComponent(errorMessage(error))}`);
+    redirect(redirectWithFlash(formData, PATH, "error", errorMessage(error)));
   }
   revalidate();
-  redirect(`${PATH}?success=${encodeURIComponent("Semester diaktifkan.")}`);
+  redirect(redirectWithFlash(formData, PATH, "success", "Semester diaktifkan."));
 }
 
 export async function deleteYear(formData: FormData) {
@@ -124,8 +133,8 @@ export async function deleteYear(formData: FormData) {
     await assertPermission("manage:master_data");
     await softDeleteAcademicYear(String(formData.get("id")));
   } catch (error) {
-    redirect(`${PATH}?error=${encodeURIComponent(errorMessage(error))}`);
+    redirect(redirectWithFlash(formData, PATH, "error", errorMessage(error)));
   }
   revalidate();
-  redirect(`${PATH}?success=${encodeURIComponent("Tahun ajaran dihapus.")}`);
+  redirect(redirectWithFlash(formData, PATH, "success", "Tahun ajaran dihapus."));
 }

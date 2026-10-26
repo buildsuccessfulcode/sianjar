@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import {
   CalendarDays,
   Coffee,
@@ -70,8 +70,77 @@ function shortTime(value: string) {
   return value.slice(0, 5);
 }
 
+function formatMinute(value: number) {
+  const hour = Math.floor(value / 60);
+  const minute = value % 60;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
 function periodText(start: number, end: number) {
   return start === end ? `Jam ${start}` : `Jam ${start}–${end}`;
+}
+
+type PositionedSchedule = {
+  schedule: CalendarSchedule;
+  segmentIndex: number;
+  start: number;
+  end: number;
+  top: number;
+  height: number;
+  timeLabel: string;
+};
+
+type LaneItem = { item: PositionedSchedule; lane: number };
+
+type ScheduleCluster = {
+  start: number;
+  end: number;
+  laneCount: number;
+  items: LaneItem[];
+};
+
+function layoutClusters(items: PositionedSchedule[]) {
+  const clusters: ScheduleCluster[] = [];
+  const sorted = [...items].sort((a, b) => a.start - b.start || a.end - b.end);
+
+  let current: PositionedSchedule[] = [];
+  let currentEnd = Number.NEGATIVE_INFINITY;
+
+  function flush() {
+    if (current.length === 0) return;
+    const laneEnds: number[] = [];
+    const assigned: LaneItem[] = [];
+
+    for (const item of current) {
+      let lane = laneEnds.findIndex((end) => end <= item.start);
+      if (lane === -1) {
+        lane = laneEnds.length;
+        laneEnds.push(item.end);
+      } else {
+        laneEnds[lane] = item.end;
+      }
+      assigned.push({ item, lane });
+    }
+
+    clusters.push({
+      start: current[0]?.start ?? 0,
+      end: current.reduce((max, item) => Math.max(max, item.end), 0),
+      laneCount: laneEnds.length,
+      items: assigned,
+    });
+
+    current = [];
+    currentEnd = Number.NEGATIVE_INFINITY;
+  }
+
+  for (const item of sorted) {
+    if (item.start >= currentEnd) flush();
+    current.push(item);
+    currentEnd = Math.max(currentEnd, item.end);
+  }
+  flush();
+
+  return clusters;
 }
 
 export function TeachingCalendar({
@@ -214,14 +283,14 @@ function CalendarGrid({
     Math.min(...sortedSlots.map((slot) => parseTime(slot.startTime))) - 5;
   const endMinute =
     Math.max(...sortedSlots.map((slot) => parseTime(slot.endTime))) + 5;
-  const scale = 1.2;
+  const scale = 1.4;
   const height = Math.max(360, (endMinute - startMinute) * scale);
   const lessonByPeriod = new Map(
     lessonSlots.map((slot) => [slot.periodNumber as number, slot]),
   );
   const columns = `repeat(${days.length}, minmax(0, 1fr))`;
 
-  function position(schedule: CalendarSchedule) {
+  function position(schedule: CalendarSchedule): PositionedSchedule[] {
     const startSlot =
       lessonByPeriod.get(schedule.periodStart) ??
       [...lessonSlots].reverse().find(
@@ -235,16 +304,44 @@ function CalendarGrid({
       ) ??
       startSlot ??
       null;
-    if (!startSlot) return null;
-    const top = (parseTime(startSlot.startTime) - startMinute) * scale;
-    const bottom = (parseTime(endSlot?.endTime ?? startSlot.endTime) - startMinute) * scale;
-    return {
-      top,
-      height: Math.max(bottom - top - 4, 34),
-      timeLabel: `${shortTime(startSlot.startTime)}–${shortTime(
-        endSlot?.endTime ?? startSlot.endTime,
-      )}`,
-    };
+    if (!startSlot) return [];
+
+    const startIndex = lessonSlots.indexOf(startSlot);
+    const endIndex = endSlot ? lessonSlots.indexOf(endSlot) : startIndex;
+    const from = Math.min(startIndex, endIndex);
+    const to = Math.max(startIndex, endIndex);
+
+    const segments: { start: number; end: number }[] = [];
+    if (from >= 0 && to >= from) {
+      for (let index = from; index <= to; index += 1) {
+        const slot = lessonSlots[index];
+        if (!slot) continue;
+        const start = parseTime(slot.startTime);
+        const end = parseTime(slot.endTime);
+        const last = segments[segments.length - 1];
+        if (last && start <= last.end) {
+          last.end = Math.max(last.end, end);
+        } else {
+          segments.push({ start, end });
+        }
+      }
+    }
+    if (segments.length === 0) {
+      segments.push({
+        start: parseTime(startSlot.startTime),
+        end: parseTime((endSlot ?? startSlot).endTime),
+      });
+    }
+
+    return segments.map((segment, segmentIndex) => ({
+      schedule,
+      segmentIndex,
+      start: segment.start,
+      end: segment.end,
+      top: (segment.start - startMinute) * scale,
+      height: Math.max((segment.end - segment.start) * scale - 4, 44),
+      timeLabel: `${formatMinute(segment.start)}–${formatMinute(segment.end)}`,
+    }));
   }
 
   return (
@@ -296,15 +393,26 @@ function CalendarGrid({
                     </p>
                   </>
                 ) : (
-                  <p
-                    className={cn(
-                      "truncate text-[9px] font-medium leading-tight",
-                      slot.kind === "BREAK" && "text-amber-700",
-                      slot.kind === "PRAYER" && "text-sky-700",
-                    )}
-                  >
-                    {shortTime(slot.startTime)} · {slot.label}
-                  </p>
+                  <>
+                    <p
+                      className={cn(
+                        "text-[10px] font-semibold leading-tight",
+                        slot.kind === "BREAK" && "text-amber-700",
+                        slot.kind === "PRAYER" && "text-sky-700",
+                      )}
+                    >
+                      {shortTime(slot.startTime)}
+                    </p>
+                    <p
+                      className={cn(
+                        "truncate text-[9px] font-medium leading-tight",
+                        slot.kind === "BREAK" && "text-amber-700",
+                        slot.kind === "PRAYER" && "text-sky-700",
+                      )}
+                    >
+                      {slot.label}
+                    </p>
+                  </>
                 )}
               </div>
             ))}
@@ -364,58 +472,98 @@ function CalendarGrid({
               style={{ gridTemplateColumns: columns }}
             >
               {days.map((day) => {
-                const daySchedules = schedules.filter(
-                  (row) => row.dayOfWeek === day,
-                );
+                const positioned = schedules
+                  .filter((row) => row.dayOfWeek === day)
+                  .flatMap((schedule) => position(schedule));
+                const clusters = layoutClusters(positioned);
+
                 return (
                   <div
                     key={day}
                     className="relative h-full border-l border-slate-100 first:border-l-0"
                   >
-                    {daySchedules.map((schedule) => {
-                      const geometry = position(schedule);
-                      if (!geometry) return null;
+                    {clusters.map((cluster, clusterIndex) => {
+                      const laneWidth = 100 / cluster.laneCount;
+
                       return (
-                        <article
-                          key={schedule.id}
-                          title={`${schedule.subjectName} · ${schedule.className} · ${schedule.teacherName} · ${geometry.timeLabel}`}
-                          className={cn(
-                            "absolute inset-x-1 z-10 overflow-hidden rounded-lg border-l-4 p-1.5 shadow-sm ring-1 ring-black/5",
-                            colorFor(schedule.subjectName),
-                          )}
-                          style={{
-                            top: geometry.top,
-                            height: geometry.height,
-                          }}
-                        >
-                          <p className="truncate text-[11px] font-semibold leading-tight sm:text-xs">
-                            {schedule.subjectName}
-                          </p>
-                          <p className="truncate text-[10px] leading-tight opacity-90">
-                            {schedule.className}
-                          </p>
-                          <p className="mt-0.5 flex items-center gap-1 truncate text-[9px] leading-tight opacity-75">
-                            {viewer === "manager" ? (
-                              <UserRound className="h-2.5 w-2.5 shrink-0" />
-                            ) : (
-                              <CalendarDays className="h-2.5 w-2.5 shrink-0" />
-                            )}
-                            <span className="truncate">
-                              {viewer === "manager"
+                        <Fragment key={`cluster-${day}-${clusterIndex}`}>
+                          {cluster.items.map(({ item: entry, lane }) => {
+                            const schedule = entry.schedule;
+                            const continuation = entry.segmentIndex > 0;
+                            const compact = entry.height < 52;
+                            const medium = !compact && entry.height < 76;
+                            const timeText =
+                              viewer === "manager"
                                 ? schedule.teacherName
                                 : periodText(
                                     schedule.periodStart,
                                     schedule.periodEnd,
-                                  )}
-                            </span>
-                          </p>
-                          {schedule.room ? (
-                            <p className="mt-0.5 flex items-center gap-1 truncate text-[9px] leading-tight opacity-75">
-                              <MapPin className="h-2.5 w-2.5 shrink-0" />
-                              <span className="truncate">{schedule.room}</span>
-                            </p>
-                          ) : null}
-                        </article>
+                                  );
+                            const label = [
+                              schedule.subjectName,
+                              schedule.className,
+                              timeText,
+                              entry.timeLabel,
+                              continuation ? null : schedule.room,
+                            ]
+                              .filter(Boolean)
+                              .join(" · ");
+
+                            return (
+                              <article
+                                key={`${schedule.id}-${entry.segmentIndex}`}
+                                tabIndex={0}
+                                aria-label={label}
+                                title={label}
+                                className={cn(
+                                  "absolute z-10 overflow-hidden rounded-lg border-l-4 p-1.5 shadow-sm ring-1 ring-black/5 outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1",
+                                  colorFor(schedule.subjectName),
+                                )}
+                                style={{
+                                  top: entry.top,
+                                  height: entry.height,
+                                  left: `calc(${lane * laneWidth}% + 2px)`,
+                                  width: `calc(${laneWidth}% - 4px)`,
+                                }}
+                              >
+                                <p className="line-clamp-1 text-[11px] font-semibold leading-tight sm:text-xs">
+                                  {schedule.subjectName}
+                                </p>
+                                {compact ? (
+                                  <p className="mt-0.5 truncate text-[9px] leading-tight opacity-75">
+                                    {entry.timeLabel}
+                                  </p>
+                                ) : (
+                                  <>
+                                    <p className="line-clamp-1 text-[10px] leading-tight opacity-90">
+                                      {schedule.className}
+                                    </p>
+                                    <p className="mt-0.5 flex items-center gap-1 truncate text-[9px] leading-tight opacity-75">
+                                      {viewer === "manager" ? (
+                                        <UserRound className="h-2.5 w-2.5 shrink-0" />
+                                      ) : (
+                                        <CalendarDays className="h-2.5 w-2.5 shrink-0" />
+                                      )}
+                                      <span className="truncate">
+                                        {timeText}
+                                      </span>
+                                    </p>
+                                    {!medium &&
+                                    !continuation &&
+                                    schedule.room ? (
+                                      <p className="mt-0.5 flex items-center gap-1 truncate text-[9px] leading-tight opacity-75">
+                                        <MapPin className="h-2.5 w-2.5 shrink-0" />
+                                        <span className="truncate">
+                                          {schedule.room}
+                                        </span>
+                                      </p>
+                                    ) : null}
+                                  </>
+                                )}
+                              </article>
+                            );
+                          })}
+                        </Fragment>
                       );
                     })}
                   </div>

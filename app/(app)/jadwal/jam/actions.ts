@@ -11,6 +11,7 @@ import {
 } from "@/data-access/time-slots";
 import { assertPermission } from "@/lib/dal";
 import { errorMessage } from "@/lib/errors";
+import { resolveReturnTo } from "@/lib/redirect";
 import { timeSlotSchema } from "@/lib/validators/schedule";
 import type { ActionState } from "@/lib/validators/common";
 
@@ -21,13 +22,19 @@ function revalidate() {
   revalidatePath("/jadwal");
 }
 
-function target(semesterId: string, error?: string, success?: string) {
-  const params = new URLSearchParams();
-  if (semesterId) params.set("semesterId", semesterId);
-  if (error) params.set("error", error);
-  if (success) params.set("success", success);
-  const query = params.toString();
-  return query ? `${PATH}?${query}` : PATH;
+function target(
+  formData: FormData,
+  semesterId: string,
+  error?: string,
+  success?: string,
+) {
+  const url = new URL(resolveReturnTo(formData, PATH), "http://localhost");
+  if (semesterId) url.searchParams.set("semesterId", semesterId);
+  url.searchParams.delete("error");
+  url.searchParams.delete("success");
+  if (error) url.searchParams.set("error", error);
+  if (success) url.searchParams.set("success", success);
+  return `${url.pathname}${url.search}`;
 }
 
 export async function saveTimeSlot(
@@ -62,6 +69,7 @@ export async function saveTimeSlot(
   revalidate();
   redirect(
     target(
+      formData,
       semesterId,
       undefined,
       id ? "Jam berhasil diperbarui." : "Jam berhasil ditambahkan.",
@@ -75,12 +83,10 @@ export async function removeTimeSlot(formData: FormData) {
     const user = await assertPermission("manage:jadwal");
     await deleteTimeSlot(String(formData.get("id")), user.id);
   } catch (error) {
-    redirect(
-      target(semesterId, errorMessage(error)),
-    );
+    redirect(target(formData, semesterId, errorMessage(error)));
   }
   revalidate();
-  redirect(target(semesterId, undefined, "Jam dihapus."));
+  redirect(target(formData, semesterId, undefined, "Jam dihapus."));
 }
 
 export async function seedDefaultTimeSlots(formData: FormData) {
@@ -89,12 +95,15 @@ export async function seedDefaultTimeSlots(formData: FormData) {
     const user = await assertPermission("manage:jadwal");
     await createDefaultTimeSlots(semesterId, user.id);
   } catch (error) {
-    redirect(
-      target(semesterId, errorMessage(error)),
-    );
+    redirect(target(formData, semesterId, errorMessage(error)));
   }
   revalidate();
   redirect(
-    target(semesterId, undefined, "Contoh susunan jam berhasil dibuat."),
+    target(
+      formData,
+      semesterId,
+      undefined,
+      "Contoh susunan jam berhasil dibuat.",
+    ),
   );
 }

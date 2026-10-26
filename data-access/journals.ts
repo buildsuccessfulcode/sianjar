@@ -7,9 +7,11 @@ import {
   desc,
   eq,
   gte,
+  ilike,
   inArray,
   isNull,
   lte,
+  or,
   sql,
 } from "drizzle-orm";
 
@@ -37,6 +39,13 @@ import {
 import { isAdmin } from "@/lib/permissions";
 import type { CurrentUser } from "@/lib/dal";
 import type { AttendanceEntryInput } from "@/lib/validators/schedule";
+import {
+  likePattern,
+  normalizePagination,
+  paginated,
+  type Paginated,
+  type SortDirection,
+} from "@/lib/pagination";
 
 export type JournalFilters = {
   semesterId?: string;
@@ -45,8 +54,40 @@ export type JournalFilters = {
   subjectId?: string;
   dateFrom?: string;
   dateTo?: string;
+  q?: string;
   limit?: number;
 };
+
+export type JournalListFilters = JournalFilters & {
+  sort?: "date" | "subject" | "class" | "teacher" | "absent";
+  dir?: SortDirection;
+  page?: number;
+  perPage?: number;
+};
+
+function journalConditions(filters: JournalFilters) {
+  const pattern = filters.q ? likePattern(filters.q) : undefined;
+  return [
+    filters.semesterId ? eq(schedules.semesterId, filters.semesterId) : undefined,
+    filters.teacherId ? eq(journals.teacherId, filters.teacherId) : undefined,
+    filters.classId ? eq(schedules.classId, filters.classId) : undefined,
+    filters.subjectId ? eq(schedules.subjectId, filters.subjectId) : undefined,
+    filters.dateFrom ? gte(journals.date, filters.dateFrom) : undefined,
+    filters.dateTo ? lte(journals.date, filters.dateTo) : undefined,
+    pattern
+      ? or(
+          ilike(journals.material, pattern),
+          ilike(journals.activity, pattern),
+          ilike(journals.notes, pattern),
+          ilike(users.name, pattern),
+          ilike(subjects.name, pattern),
+          ilike(departments.code, pattern),
+          ilike(classes.section, pattern),
+          sql`${classes.gradeLevel}::text ilike ${pattern}`,
+        )
+      : undefined,
+  ];
+}
 
 export type SaveJournalInput = {
   scheduleId: string;
@@ -266,14 +307,7 @@ export async function getJournalById(id: string) {
 }
 
 export async function listJournals(filters: JournalFilters) {
-  const conditions = [
-    filters.semesterId ? eq(schedules.semesterId, filters.semesterId) : undefined,
-    filters.teacherId ? eq(journals.teacherId, filters.teacherId) : undefined,
-    filters.classId ? eq(schedules.classId, filters.classId) : undefined,
-    filters.subjectId ? eq(schedules.subjectId, filters.subjectId) : undefined,
-    filters.dateFrom ? gte(journals.date, filters.dateFrom) : undefined,
-    filters.dateTo ? lte(journals.date, filters.dateTo) : undefined,
-  ];
+  const conditions = journalConditions(filters);
 
   const query = getDb()
     .select({
@@ -310,22 +344,92 @@ export async function listJournals(filters: JournalFilters) {
 }
 
 export async function countJournals(filters: JournalFilters) {
-  const conditions = [
-    filters.semesterId ? eq(schedules.semesterId, filters.semesterId) : undefined,
-    filters.teacherId ? eq(journals.teacherId, filters.teacherId) : undefined,
-    filters.classId ? eq(schedules.classId, filters.classId) : undefined,
-    filters.subjectId ? eq(schedules.subjectId, filters.subjectId) : undefined,
-    filters.dateFrom ? gte(journals.date, filters.dateFrom) : undefined,
-    filters.dateTo ? lte(journals.date, filters.dateTo) : undefined,
-  ];
+  const conditions = journalConditions(filters);
 
   const [row] = await getDb()
     .select({ total: count(journals.id) })
     .from(journals)
     .innerJoin(schedules, eq(journals.scheduleId, schedules.id))
+    .innerJoin(subjects, eq(schedules.subjectId, subjects.id))
     .innerJoin(classes, eq(schedules.classId, classes.id))
+    .innerJoin(departments, eq(classes.departmentId, departments.id))
+    .innerJoin(users, eq(journals.teacherId, users.id))
     .where(and(...conditions));
   return Number(row?.total ?? 0);
+}
+
+export async function listJournalsPaged(
+  filters: JournalListFilters,
+): Promise<Paginated<Awaited<ReturnType<typeof listJournals>>[number]>> {
+  const db = getDb();
+  const perPage = filters.perPage ?? 20;
+  const page = filters.page ?? 1;
+  const conditions = journalConditions(filters);
+
+  const [totalRow] = await db
+    .select({ total: count(journals.id) })
+    .from(journals)
+    .innerJoin(schedules, eq(journals.scheduleId, schedules.id))
+    .innerJoin(subjects, eq(schedules.subjectId, subjects.id))
+    .innerJoin(classes, eq(schedules.classId, classes.id))
+    .innerJoin(departments, eq(classes.departmentId, departments.id))
+    .innerJoin(users, eq(journals.teacherId, users.id))
+    .where(and(...conditions));
+  const total = Number(totalRow?.total ?? 0);
+  const meta = normalizePagination(total, page, perPage);
+
+  const sort = filters.sort ?? "date";
+  const dir = filters.dir ?? (sort === "date" ? "desc" : "asc");
+  const absentExpr = sql<number>`(select count(*) from attendance_records ar where ar.journal_id = ${journals.id})`;
+  const sortColumn =
+    sort === "subject"
+      ? subjects.name
+      : sort === "class"
+        ? classes.gradeLevel
+        : sort === "teacher"
+          ? users.name
+          : sort === "absent"
+            ? absentExpr
+            : journals.date;
+
+  const rows = await db
+    .select({
+      id: journals.id,
+      date: journals.date,
+      material: journals.material,
+      activity: journals.activity,
+      teacherId: journals.teacherId,
+      teacherName: users.name,
+      subjectName: subjects.name,
+      classId: schedules.classId,
+      gradeLevel: classes.gradeLevel,
+      section: classes.section,
+      departmentCode: departments.code,
+      periodStart: schedules.periodStart,
+      periodEnd: schedules.periodEnd,
+      absentCount: absentExpr,
+    })
+    .from(journals)
+    .innerJoin(schedules, eq(journals.scheduleId, schedules.id))
+    .innerJoin(subjects, eq(schedules.subjectId, subjects.id))
+    .innerJoin(classes, eq(schedules.classId, classes.id))
+    .innerJoin(departments, eq(classes.departmentId, departments.id))
+    .innerJoin(users, eq(journals.teacherId, users.id))
+    .where(and(...conditions))
+    .orderBy(
+      dir === "asc" ? asc(sortColumn) : desc(sortColumn),
+      desc(journals.date),
+      asc(schedules.periodStart),
+    )
+    .limit(perPage)
+    .offset(meta.offset);
+
+  return paginated(
+    rows.map((row) => ({ ...row, absentCount: Number(row.absentCount) })),
+    total,
+    meta.page,
+    perPage,
+  );
 }
 
 export type AttendanceRecapFilters = {
@@ -334,10 +438,12 @@ export type AttendanceRecapFilters = {
   classId?: string;
   subjectId?: string;
   classIds?: string[];
+  q?: string;
 };
 
-export async function getAttendanceRecap(filters: AttendanceRecapFilters) {
-  const conditions = [
+function attendanceRecapConditions(filters: AttendanceRecapFilters) {
+  const pattern = filters.q ? likePattern(filters.q) : undefined;
+  return [
     gte(journals.date, filters.dateFrom),
     lte(journals.date, filters.dateTo),
     filters.classId ? eq(schedules.classId, filters.classId) : undefined,
@@ -347,7 +453,20 @@ export async function getAttendanceRecap(filters: AttendanceRecapFilters) {
         ? inArray(schedules.classId, filters.classIds)
         : sql`false`
       : undefined,
+    pattern
+      ? or(
+          ilike(students.name, pattern),
+          ilike(students.nisn, pattern),
+          ilike(departments.code, pattern),
+          ilike(classes.section, pattern),
+          sql`${classes.gradeLevel}::text ilike ${pattern}`,
+        )
+      : undefined,
   ];
+}
+
+export async function getAttendanceRecap(filters: AttendanceRecapFilters) {
+  const conditions = attendanceRecapConditions(filters);
 
   const rows = await getDb()
     .select({
@@ -388,6 +507,180 @@ export async function getAttendanceRecap(filters: AttendanceRecapFilters) {
     alpa: Number(row.alpa),
     dispensasi: Number(row.dispensasi),
     total: Number(row.total),
+  }));
+}
+
+export type AttendanceRecapListFilters = AttendanceRecapFilters & {
+  sort?: "name" | "class" | "sakit" | "izin" | "alpa" | "dispensasi" | "total";
+  dir?: SortDirection;
+  page?: number;
+  perPage?: number;
+};
+
+export async function getAttendanceRecapPaged(
+  filters: AttendanceRecapListFilters,
+): Promise<Paginated<Awaited<ReturnType<typeof getAttendanceRecap>>[number]>> {
+  const db = getDb();
+  const perPage = filters.perPage ?? 20;
+  const page = filters.page ?? 1;
+  const conditions = attendanceRecapConditions(filters);
+
+  const [totalRow] = await db
+    .select({ total: sql<number>`count(distinct ${students.id})` })
+    .from(attendanceRecords)
+    .innerJoin(journals, eq(attendanceRecords.journalId, journals.id))
+    .innerJoin(schedules, eq(journals.scheduleId, schedules.id))
+    .innerJoin(subjects, eq(schedules.subjectId, subjects.id))
+    .innerJoin(classes, eq(schedules.classId, classes.id))
+    .innerJoin(departments, eq(classes.departmentId, departments.id))
+    .innerJoin(students, eq(attendanceRecords.studentId, students.id))
+    .where(and(...conditions));
+  const total = Number(totalRow?.total ?? 0);
+  const meta = normalizePagination(total, page, perPage);
+
+  const sakitExpr = sql<number>`count(*) filter (where ${attendanceRecords.status} = 'SAKIT')`;
+  const izinExpr = sql<number>`count(*) filter (where ${attendanceRecords.status} = 'IZIN')`;
+  const alpaExpr = sql<number>`count(*) filter (where ${attendanceRecords.status} = 'ALPA')`;
+  const dispensasiExpr = sql<number>`count(*) filter (where ${attendanceRecords.status} = 'DISPENSASI')`;
+  const totalExpr = sql<number>`count(*)`;
+
+  const sort = filters.sort ?? "total";
+  const dir = filters.dir ?? (sort === "name" || sort === "class" ? "asc" : "desc");
+  const sortColumn =
+    sort === "name"
+      ? students.name
+      : sort === "class"
+        ? classes.gradeLevel
+        : sort === "sakit"
+          ? sakitExpr
+          : sort === "izin"
+            ? izinExpr
+            : sort === "alpa"
+              ? alpaExpr
+              : sort === "dispensasi"
+                ? dispensasiExpr
+                : totalExpr;
+
+  const rows = await db
+    .select({
+      studentId: students.id,
+      studentName: students.name,
+      nisn: students.nisn,
+      gradeLevel: classes.gradeLevel,
+      section: classes.section,
+      departmentCode: departments.code,
+      sakit: sakitExpr,
+      izin: izinExpr,
+      alpa: alpaExpr,
+      dispensasi: dispensasiExpr,
+      total: totalExpr,
+    })
+    .from(attendanceRecords)
+    .innerJoin(journals, eq(attendanceRecords.journalId, journals.id))
+    .innerJoin(schedules, eq(journals.scheduleId, schedules.id))
+    .innerJoin(subjects, eq(schedules.subjectId, subjects.id))
+    .innerJoin(classes, eq(schedules.classId, classes.id))
+    .innerJoin(departments, eq(classes.departmentId, departments.id))
+    .innerJoin(students, eq(attendanceRecords.studentId, students.id))
+    .where(and(...conditions))
+    .groupBy(
+      students.id,
+      students.name,
+      students.nisn,
+      classes.gradeLevel,
+      classes.section,
+      departments.code,
+    )
+    .orderBy(
+      dir === "asc" ? asc(sortColumn) : desc(sortColumn),
+      asc(classes.gradeLevel),
+      asc(classes.section),
+      asc(students.name),
+    )
+    .limit(perPage)
+    .offset(meta.offset);
+
+  return paginated(
+    rows.map((row) => ({
+      ...row,
+      sakit: Number(row.sakit),
+      izin: Number(row.izin),
+      alpa: Number(row.alpa),
+      dispensasi: Number(row.dispensasi),
+      total: Number(row.total),
+    })),
+    total,
+    meta.page,
+    perPage,
+  );
+}
+
+export async function getAttendanceRecapTotals(filters: AttendanceRecapFilters) {
+  const conditions = attendanceRecapConditions(filters);
+  const [row] = await getDb()
+    .select({
+      sakit: sql<number>`count(*) filter (where ${attendanceRecords.status} = 'SAKIT')`,
+      izin: sql<number>`count(*) filter (where ${attendanceRecords.status} = 'IZIN')`,
+      alpa: sql<number>`count(*) filter (where ${attendanceRecords.status} = 'ALPA')`,
+      dispensasi: sql<number>`count(*) filter (where ${attendanceRecords.status} = 'DISPENSASI')`,
+      total: sql<number>`count(*)`,
+      students: sql<number>`count(distinct ${attendanceRecords.studentId})`,
+    })
+    .from(attendanceRecords)
+    .innerJoin(journals, eq(attendanceRecords.journalId, journals.id))
+    .innerJoin(schedules, eq(journals.scheduleId, schedules.id))
+    .innerJoin(subjects, eq(schedules.subjectId, subjects.id))
+    .innerJoin(classes, eq(schedules.classId, classes.id))
+    .innerJoin(departments, eq(classes.departmentId, departments.id))
+    .innerJoin(students, eq(attendanceRecords.studentId, students.id))
+    .where(and(...conditions));
+
+  return {
+    sakit: Number(row?.sakit ?? 0),
+    izin: Number(row?.izin ?? 0),
+    alpa: Number(row?.alpa ?? 0),
+    dispensasi: Number(row?.dispensasi ?? 0),
+    total: Number(row?.total ?? 0),
+    students: Number(row?.students ?? 0),
+  };
+}
+
+export async function getAttendanceRecapByClass(
+  filters: AttendanceRecapFilters,
+) {
+  const conditions = attendanceRecapConditions(filters);
+  const rows = await getDb()
+    .select({
+      classId: classes.id,
+      gradeLevel: classes.gradeLevel,
+      section: classes.section,
+      departmentCode: departments.code,
+      sakit: sql<number>`count(*) filter (where ${attendanceRecords.status} = 'SAKIT')`,
+      izin: sql<number>`count(*) filter (where ${attendanceRecords.status} = 'IZIN')`,
+      alpa: sql<number>`count(*) filter (where ${attendanceRecords.status} = 'ALPA')`,
+      dispensasi: sql<number>`count(*) filter (where ${attendanceRecords.status} = 'DISPENSASI')`,
+      total: sql<number>`count(*)`,
+      students: sql<number>`count(distinct ${attendanceRecords.studentId})`,
+    })
+    .from(attendanceRecords)
+    .innerJoin(journals, eq(attendanceRecords.journalId, journals.id))
+    .innerJoin(schedules, eq(journals.scheduleId, schedules.id))
+    .innerJoin(subjects, eq(schedules.subjectId, subjects.id))
+    .innerJoin(classes, eq(schedules.classId, classes.id))
+    .innerJoin(departments, eq(classes.departmentId, departments.id))
+    .innerJoin(students, eq(attendanceRecords.studentId, students.id))
+    .where(and(...conditions))
+    .groupBy(classes.id, classes.gradeLevel, classes.section, departments.code)
+    .orderBy(desc(sql`count(*)`));
+
+  return rows.map((row) => ({
+    ...row,
+    sakit: Number(row.sakit),
+    izin: Number(row.izin),
+    alpa: Number(row.alpa),
+    dispensasi: Number(row.dispensasi),
+    total: Number(row.total),
+    students: Number(row.students),
   }));
 }
 

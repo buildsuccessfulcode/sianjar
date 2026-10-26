@@ -37,6 +37,7 @@ export async function GET(request: Request) {
   const dateTo = url.searchParams.get("dateTo") || today;
   const classId = url.searchParams.get("classId") || undefined;
   const subjectId = url.searchParams.get("subjectId") || undefined;
+  const q = url.searchParams.get("q") || undefined;
 
   let classIds: string[] | undefined;
   if (!hasPermission(roles, "read:jurnal_all")) {
@@ -59,6 +60,7 @@ export async function GET(request: Request) {
     classId,
     subjectId,
     classIds,
+    q,
   });
 
   const header = [
@@ -78,7 +80,7 @@ export async function GET(request: Request) {
       [
         row.studentName,
         row.nisn,
-        `${row.gradeLevel} ${row.departmentCode} ${row.section}`,
+        `${row.gradeLevel} ${row.departmentCode} ${row.section}`.trim(),
         row.sakit,
         row.izin,
         row.alpa,

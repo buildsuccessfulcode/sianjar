@@ -230,6 +230,18 @@ Kalender Mingguan · Ganjil 2026/2027
 - Istirahat diberi pita amber; sholat/ibadah diberi pita sky.
 - Slot istirahat/sholat tidak bisa dipilih sebagai jam mengajar dan tidak memiliki aksi jurnal.
 - Warna blok mapel berbeda per mapel agar mudah dipindai; teks tetap menjadi informasi utama.
+- Admin/Waka melihat satu kelas atau satu guru pada satu waktu melalui pemilih **Kalender untuk** (default kelas pertama); guru melihat jadwalnya sendiri.
+- Blok yang melewati istirahat/sholat dipotong menjadi beberapa segmen sehingga pita istirahat dan sholat tetap terlihat.
+- Jika masih ada blok yang benar-benar overlap, jadwal dibagi ke lane berdampingan (lane packing); kartu menyesuaikan tinggi: ringkas (mapel + waktu) pada slot pendek, lalu menampilkan kelas, guru, dan ruang saat ruang cukup.
+
+**Salin jadwal dan jam (Admin/Waka)**
+
+- Tombol **Salin Jadwal** di header `/jadwal` membuka modal.
+- Admin/Waka memilih semester sumber dari daftar semester yang lebih awal; default semester terdekat sebelumnya.
+- Checkbox **Salin jadwal mengajar** aktif secara default. Checkbox **Salin susunan jam pelajaran** aktif jika semester tujuan belum punya jam; jika sudah ada, pilihan dinonaktifkan dan jam tidak disalin.
+- Kelas dipetakan mengikuti kenaikan tingkat atau aturan promosi. Pesan modal mengingatkan agar promosi kelas dijalankan lebih dulu.
+- Hasil ditampilkan lewat toast: jumlah jam dan jadwal yang disalin, jumlah yang dilewati, serta alasan ringkas (kelas tanpa padanan, bentrok, jam tidak tersedia, atau guru-mapel belum dipetakan).
+- Operasi tidak menghapus data tujuan dan hanya menambah data yang belum bentrok.
 
 **Susunan jam (Admin/Waka)**
 
@@ -278,12 +290,15 @@ Konflik: 0
 
 Pola halaman konsisten:
 1. Judul + deskripsi + tombol “Tambah”.
-2. Filter/pencarian sederhana.
-3. Tabel dengan aksi Edit / Nonaktifkan.
-4. Form tambah/edit tampil di modal popup di atas daftar; modal menutup otomatis setelah berhasil.
-5. Konfirmasi hapus/nonaktifkan memakai modal konfirmasi.
+2. Bar filter: pencarian teks, filter kontekstual (tahun ajaran, jurusan, kelas, mapel, status), tombol **Terapkan** dan **Reset**.
+3. Ringkasan jumlah data, sorting per kolom (klik judul kolom), grouping bila relevan, pagination server-side, dan pilihan 10/20/50/100 baris per halaman.
+4. Tabel dengan aksi Edit / Nonaktifkan.
+5. Form tambah/edit tampil di modal popup di atas daftar; modal menutup otomatis setelah berhasil.
+6. Konfirmasi hapus/nonaktifkan memakai modal konfirmasi.
 
-Soft delete menyembunyikan data dari daftar operasional, tetapi baris histori dan relasinya tetap tersimpan. Filter khusus data nonaktif direncanakan P1.
+Filter, sorting, dan pagination disimpan di query string agar dapat di-bookmark dan tidak hilang saat refresh. Pencarian dan filter dijalankan di server; halaman tidak menarik seluruh isi tabel.
+
+Soft delete menyembunyikan data dari daftar operasional, tetapi baris histori dan relasinya tetap tersimpan. Daftar menyediakan filter status aktif/nonaktif.
 
 ### 4.7a Enrollment
 
@@ -302,16 +317,33 @@ Cari siswa: [ nama / NISN ]
 Siswa yang sudah terdaftar pada tahun ajaran ini dilewati.
 ```
 
-- Modal besar, daftar siswa dapat dicari dan digulir.
+- Modal besar, daftar siswa dapat dicari, dipaginasi 50 baris per halaman, dan digulir.
 - Siswa yang sudah terdaftar ditandai dan tidak dapat dipilih.
 - Hasil ditampilkan lewat toast: jumlah dibuat, diaktifkan kembali, dan dilewati.
+- Daftar enrollment memiliki filter tahun ajaran, pencarian nama/NISN, filter kelas/status, sorting, pagination, dan per-page.
 
-**Ubah dan pindah kelas**
+**Ubah, pindah kelas, dan ubah status**
 
 - Aksi **Ubah** per baris membuka modal kelas + status untuk enrollment tahun berjalan.
 - Centang beberapa baris lalu pilih kelas tujuan untuk **pindah kelas massal**.
+- Centang beberapa baris lalu pilih status untuk **ubah status massal**.
 - Pindah kelas hanya berlaku dalam tahun ajaran yang sama; perubahan dicatat sebagai update enrollment, bukan enrollment baru.
 - Kenaikan ke tahun ajaran berikutnya tetap melalui `/promosi`.
+
+### 4.7b Import Siswa dari Excel
+
+- Tombol **Import Excel** di header `/admin/siswa` membuka modal berisi ringkasan cara pakai, tombol **Unduh Template Excel**, dan input file.
+- Template `.xlsx` memiliki sheet **Siswa** (kolom NISN, Nama Lengkap, Jenis Kelamin, Tanggal Lahir) dan sheet **Petunjuk**.
+- Kolom NISN disimpan sebagai teks; Jenis Kelamin memakai validasi daftar `L/P`; Tanggal Lahir opsional format `YYYY-MM-DD`.
+- Saat submit, file divalidasi penuh. Jika ada baris bermasalah, import dibatalkan dan toast menampilkan nomor baris beserta penyebabnya.
+- Jika valid, toast menampilkan jumlah siswa yang diimpor dan jumlah NISN yang dilewati karena sudah terdaftar.
+- Kelas tidak diisi dari file; setelah import, admin mengatur penempatan melalui **Enrollment**.
+- Batas: file `.xlsx` maksimal 5 MB dan 5000 baris data.
+
+**Mapping guru–mapel**
+
+- Daftar mapping memiliki pencarian guru/mapel, filter guru/mapel, sorting, dan pagination.
+- **Mapping Massal** memilih satu guru dan beberapa mapel sekaligus; mapping yang sudah ada dilewati.
 
 ---
 
@@ -325,7 +357,12 @@ Siswa yang sudah terdaftar pada tahun ajaran ini dilewati.
 | `Button` | `components/ui/button.tsx` | Varian primary, secondary, ghost, danger |
 | `Input`, `Textarea`, `Select` | `components/ui/form.tsx` | Form primitives dengan label/error |
 | `Badge` / `StatusPill` | `components/ui/badge.tsx` | Status berwarna + teks |
-| `Table` | `components/ui/table.tsx` | Tabel data responsive |
+| `Table` | `components/ui/table.tsx` | Tabel data responsive; `TableGroupRow` untuk grouping |
+| `FilterBar` | `components/ui/filter-bar.tsx` | Bar filter GET dengan tombol Terapkan/Reset |
+| `SearchField` | `components/ui/search-field.tsx` | Input pencarian dengan ikon |
+| `SortableHead` | `components/ui/sortable-head.tsx` | Judul kolom sorting untuk tabel |
+| `SortLinks` | `components/ui/sort-links.tsx` | Sorting ringkas untuk tabel yang dikelola client (enrollment) |
+| `Pagination` | `components/ui/pagination.tsx` | Ringkasan data, per-page, dan navigasi halaman |
 | `EmptyState` | `components/ui/empty-state.tsx` | Data kosong + CTA |
 | `Alert` | `components/ui/alert.tsx` | Info, warning, error |
 | `SubmitButton` | `components/ui/submit-button.tsx` | Pending state dengan `useFormStatus` |
@@ -353,6 +390,7 @@ Presentational component tidak boleh melakukan query DB. Data fetching ada di Se
 - Susunan jam kosong: “Belum ada susunan jam” + CTA **Gunakan Contoh Jam**.
 - Jurnal kosong: “Belum ada jurnal. Isi jurnal pertamamu.”
 - Master kosong: “Belum ada data. Tambah data pertama.”
+- Filter tidak menghasilkan data: “Tidak ada data pada filter ini.” + tombol Reset.
 
 ### Loading
 - Tombol submit memakai spinner inline dan disabled selama pending.

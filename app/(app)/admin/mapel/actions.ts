@@ -10,6 +10,7 @@ import {
 } from "@/data-access/master";
 import { assertPermission } from "@/lib/dal";
 import { errorMessage } from "@/lib/errors";
+import { redirectWithFlash } from "@/lib/redirect";
 import { subjectSchema } from "@/lib/validators/master";
 import type { ActionState } from "@/lib/validators/common";
 
@@ -42,9 +43,12 @@ export async function saveSubject(
   revalidatePath(PATH);
   revalidatePath("/guru-mapel");
   redirect(
-    `${PATH}?success=${encodeURIComponent(
+    redirectWithFlash(
+      formData,
+      PATH,
+      "success",
       id ? "Mapel berhasil diperbarui." : "Mapel berhasil ditambahkan.",
-    )}`,
+    ),
   );
 }
 
@@ -53,8 +57,8 @@ export async function deleteSubject(formData: FormData) {
     await assertPermission("manage:master_data");
     await softDeleteSubject(String(formData.get("id")));
   } catch (error) {
-    redirect(`${PATH}?error=${encodeURIComponent(errorMessage(error))}`);
+    redirect(redirectWithFlash(formData, PATH, "error", errorMessage(error)));
   }
   revalidatePath(PATH);
-  redirect(`${PATH}?success=${encodeURIComponent("Mapel dinonaktifkan.")}`);
+  redirect(redirectWithFlash(formData, PATH, "success", "Mapel dinonaktifkan."));
 }

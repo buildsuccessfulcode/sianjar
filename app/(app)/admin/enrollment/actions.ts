@@ -1,4 +1,4 @@
-"use server";
+﻿"use server";
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -9,11 +9,14 @@ import {
   deleteEnrollment,
   moveEnrollmentsBulk as moveEnrollmentsBulkData,
   updateEnrollment,
+  updateEnrollmentsStatusBulk as updateEnrollmentsStatusBulkData,
 } from "@/data-access/master";
 import { assertPermission } from "@/lib/dal";
 import { errorMessage, ValidationError } from "@/lib/errors";
+import { resolveReturnTo } from "@/lib/redirect";
 import {
   enrollmentBulkSchema,
+  enrollmentBulkStatusSchema,
   enrollmentMoveSchema,
   enrollmentSchema,
   enrollmentUpdateSchema,
@@ -24,12 +27,13 @@ const PATH = "/admin/enrollment";
 
 function target(formData: FormData, error?: string, success?: string) {
   const year = String(formData.get("year") ?? "");
-  const params = new URLSearchParams();
-  if (year) params.set("year", year);
-  if (error) params.set("error", error);
-  if (success) params.set("success", success);
-  const query = params.toString();
-  return query ? `${PATH}?${query}` : PATH;
+  const url = new URL(resolveReturnTo(formData, PATH), "http://localhost");
+  if (year) url.searchParams.set("year", year);
+  url.searchParams.delete("error");
+  url.searchParams.delete("success");
+  if (error) url.searchParams.set("error", error);
+  if (success) url.searchParams.set("success", success);
+  return `${url.pathname}${url.search}`;
 }
 
 export async function saveEnrollment(
@@ -169,6 +173,29 @@ export async function moveEnrollmentsBulk(formData: FormData) {
   revalidatePath(PATH);
   revalidatePath("/admin/siswa");
   redirect(target(formData, undefined, `${moved} enrollment dipindahkan.`));
+}
+
+export async function bulkUpdateEnrollmentStatus(formData: FormData) {
+  let updated = 0;
+  try {
+    await assertPermission("manage:master_data");
+    const parsed = enrollmentBulkStatusSchema.safeParse({
+      enrollmentIds: formData.getAll("enrollmentIds").map(String),
+      status: formData.get("status"),
+    });
+    if (!parsed.success) {
+      throw new ValidationError(
+        parsed.error.issues[0]?.message ?? "Pilih siswa dan status.",
+      );
+    }
+    const result = await updateEnrollmentsStatusBulkData(parsed.data);
+    updated = result.updated;
+  } catch (error) {
+    redirect(target(formData, errorMessage(error)));
+  }
+  revalidatePath(PATH);
+  revalidatePath("/admin/siswa");
+  redirect(target(formData, undefined, `${updated} enrollment diperbarui.`));
 }
 
 export async function removeEnrollment(formData: FormData) {

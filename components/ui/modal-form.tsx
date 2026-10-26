@@ -20,6 +20,7 @@ export function ModalForm({
   pendingText,
   action,
   size,
+  returnTo,
   children,
 }: {
   triggerLabel: string;
@@ -33,6 +34,7 @@ export function ModalForm({
   pendingText?: string;
   action: (state: ActionState, formData: FormData) => Promise<ActionState>;
   size?: "sm" | "md" | "lg";
+  returnTo?: string;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -70,6 +72,9 @@ export function ModalForm({
           pendingText={pendingText}
           onCancel={() => setOpen(false)}
         >
+          {returnTo ? (
+            <input type="hidden" name="returnTo" value={returnTo} />
+          ) : null}
           {children}
         </ActionForm>
       </Modal>

@@ -10,6 +10,7 @@ import {
 } from "@/data-access/master";
 import { assertPermission } from "@/lib/dal";
 import { errorMessage } from "@/lib/errors";
+import { redirectWithFlash } from "@/lib/redirect";
 import {
   teacherCreateSchema,
   teacherUpdateSchema,
@@ -71,9 +72,12 @@ export async function saveTeacher(
   revalidatePath("/guru-mapel");
   revalidatePath("/jadwal");
   redirect(
-    `${PATH}?success=${encodeURIComponent(
+    redirectWithFlash(
+      formData,
+      PATH,
+      "success",
       id ? "Guru berhasil diperbarui." : "Guru berhasil ditambahkan.",
-    )}`,
+    ),
   );
 }
 
@@ -82,8 +86,8 @@ export async function deleteTeacher(formData: FormData) {
     await assertPermission("manage:master_data");
     await softDeleteTeacher(String(formData.get("id")));
   } catch (error) {
-    redirect(`${PATH}?error=${encodeURIComponent(errorMessage(error))}`);
+    redirect(redirectWithFlash(formData, PATH, "error", errorMessage(error)));
   }
   revalidatePath(PATH);
-  redirect(`${PATH}?success=${encodeURIComponent("Guru dinonaktifkan.")}`);
+  redirect(redirectWithFlash(formData, PATH, "success", "Guru dinonaktifkan."));
 }

@@ -27,6 +27,7 @@ Implementasi aktual: `db/schema/*.ts`, koneksi: `lib/db.ts`, migration: `drizzle
 7. **Snapshot guru** pada jurnal: `journals.teacher_id` disalin dari jadwal saat jurnal dibuat.
 8. **Status aktif tunggal** dijaga partial unique index.
 9. **Bentrok jadwal** divalidasi di server (overlap interval), karena unique index pada `period_start` saja tidak cukup.
+10. **Daftar besar** memakai query server-side: filter/pencarian di SQL, sorting dari whitelist kolom, `limit`/`offset`, dan query `count` terpisah untuk metadata pagination. Tidak menarik seluruh tabel ke aplikasi.
 
 ---
 
@@ -166,6 +167,7 @@ Aturan aplikasi: semester aktif harus berada pada tahun ajaran aktif.
 
 UNIQUE `(academic_year_id, department_id, grade_level, section)`.
 Index: `(academic_year_id)`, `(department_id)`.
+`section` boleh berupa string kosong jika sekolah tidak memakai rombel; label kelas menjadi `<grade_level> <department.code>`.
 
 ### 4.8 `subjects`
 

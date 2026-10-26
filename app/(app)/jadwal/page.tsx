@@ -1,13 +1,16 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Fragment } from "react";
 import {
   CalendarClock,
   CalendarDays,
+  Copy,
   Pencil,
   Plus,
   Settings2,
 } from "lucide-react";
 
+import { CalendarScope } from "@/components/domain/calendar-scope";
 import { TeachingCalendar } from "@/components/domain/teaching-calendar";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -21,13 +24,18 @@ import {
 } from "@/components/ui/card";
 import { ConfirmSubmit } from "@/components/ui/confirm-submit";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Field, Input, Select } from "@/components/ui/form";
+import { Checkbox, Field, Input, Select } from "@/components/ui/form";
+import { ListQueryHidden } from "@/components/ui/list-query-hidden";
 import { ModalForm } from "@/components/ui/modal-form";
 import { PageHeader } from "@/components/ui/page-header";
+import { Pagination } from "@/components/ui/pagination";
+import { SearchField } from "@/components/ui/search-field";
+import { SortableHead } from "@/components/ui/sortable-head";
 import {
   Table,
   TableBody,
   TableCell,
+  TableGroupRow,
   TableHead,
   TableHeader,
   TableRow,
@@ -39,14 +47,25 @@ import {
   listSubjects,
   listTeacherOptions,
 } from "@/data-access/master";
-import { listSchedules } from "@/data-access/schedules";
+import { listSchedules, listSchedulesPaged } from "@/data-access/schedules";
 import { listTimeSlots } from "@/data-access/time-slots";
 import { DAY_NAMES } from "@/db/schema/enums";
 import { requirePagePermission } from "@/lib/dal";
 import { hasPermission } from "@/lib/permissions";
 import { dayOfWeekFromDate, todayInJakarta } from "@/lib/date";
+import {
+  buildListHref,
+  parsePage,
+  parsePerPage,
+  resolveDirection,
+  resolveSort,
+} from "@/lib/pagination";
 import { classLabel, cn } from "@/lib/utils";
-import { removeSchedule, saveSchedule } from "./actions";
+import {
+  copyScheduleDataAction,
+  removeSchedule,
+  saveSchedule,
+} from "./actions";
 
 export const metadata: Metadata = { title: "Jadwal Mengajar" };
 export const dynamic = "force-dynamic";
@@ -174,12 +193,17 @@ function ScheduleFields({
   );
 }
 
-type SearchParams = Promise<{
-  semesterId?: string;
-  teacherId?: string;
-  classId?: string;
-  dayOfWeek?: string;
-}>;
+type SearchParams = Promise<Record<string, string | string[] | undefined>>;
+
+const sortOptions = [
+  "day",
+  "period",
+  "subject",
+  "class",
+  "teacher",
+  "room",
+] as const;
+const BASE_PATH = "/jadwal";
 
 export default async function SchedulePage({
   searchParams,
@@ -189,6 +213,14 @@ export default async function SchedulePage({
   const user = await requirePagePermission("read:jadwal_own");
   const canManage = hasPermission(user.roles, "manage:jadwal");
   const params = await searchParams;
+  const q = typeof params.q === "string" ? params.q : undefined;
+  const subjectId =
+    typeof params.subjectId === "string" ? params.subjectId : undefined;
+  const sort = resolveSort(params.sort, sortOptions, "day");
+  const dir = resolveDirection(params.dir, "asc");
+  const page = parsePage(params.page);
+  const perPage = parsePerPage(params.perPage);
+  const returnTo = buildListHref(BASE_PATH, params);
 
   const [semesters, activeSemester, teachers, subjects] = await Promise.all([
     listSemesters(),
@@ -208,23 +240,66 @@ export default async function SchedulePage({
       ? await listClasses(selectedSemester.academicYearId)
       : [];
 
+  const selectedTeacherId =
+    canManage && typeof params.teacherId === "string" && params.teacherId
+      ? params.teacherId
+      : undefined;
+  const selectedClassId =
+    canManage && typeof params.classId === "string" && params.classId
+      ? params.classId
+      : undefined;
+
+  const scheduleFilters = {
+    semesterId: selectedSemester?.id,
+    teacherId: canManage ? selectedTeacherId : user.id,
+    classId: selectedClassId,
+    subjectId: canManage ? subjectId : undefined,
+    dayOfWeek:
+      canManage && typeof params.dayOfWeek === "string" && params.dayOfWeek
+        ? Number(params.dayOfWeek)
+        : undefined,
+    q,
+  };
+
   const schedules = selectedSemester
-    ? await listSchedules({
-        semesterId: selectedSemester.id,
-        teacherId: canManage ? params.teacherId : user.id,
-        classId: canManage ? params.classId : undefined,
-        dayOfWeek:
-          canManage && params.dayOfWeek
-            ? Number(params.dayOfWeek)
-            : undefined,
-      })
+    ? await listSchedules(scheduleFilters)
     : [];
+  const result = selectedSemester
+    ? await listSchedulesPaged({
+        ...scheduleFilters,
+        sort,
+        dir,
+        page,
+        perPage,
+      })
+    : null;
 
   const timeSlots = selectedSemester
     ? await listTimeSlots(selectedSemester.id)
     : [];
 
-  const calendarSchedules = schedules.map((row) => ({
+  const copySources = selectedSemester
+    ? semesters
+        .filter(
+          (semester) =>
+            semester.id !== selectedSemester.id &&
+            semester.startDate < selectedSemester.startDate,
+        )
+        .sort((a, b) => b.startDate.localeCompare(a.startDate))
+    : [];
+  const timeSlotsEmpty = timeSlots.length === 0;
+
+  const calendarClass =
+    canManage && !selectedTeacherId
+      ? (classes.find((row) => row.id === selectedClassId) ??
+        classes[0] ??
+        null)
+      : null;
+  const calendarRows = calendarClass
+    ? schedules.filter((row) => row.classId === calendarClass.id)
+    : schedules;
+
+  const calendarSchedules = calendarRows.map((row) => ({
     id: row.id,
     dayOfWeek: row.dayOfWeek,
     periodStart: row.periodStart,
@@ -260,6 +335,7 @@ export default async function SchedulePage({
               {selectedSemester ? (
                 <ModalForm
                   action={saveSchedule}
+                  returnTo={returnTo}
                   triggerLabel="Tambah Jadwal"
                   triggerIcon={<Plus className="h-4 w-4" />}
                   title="Tambah Jadwal"
@@ -272,6 +348,67 @@ export default async function SchedulePage({
                     subjects={subjects}
                     classes={classes}
                   />
+                </ModalForm>
+              ) : null}
+              {selectedSemester && copySources.length > 0 ? (
+                <ModalForm
+                  action={copyScheduleDataAction}
+                  triggerLabel="Salin Jadwal"
+                  triggerIcon={<Copy className="h-4 w-4" />}
+                  triggerVariant="secondary"
+                  title="Salin Jadwal & Jam"
+                  description="Salin susunan jam dan jadwal mengajar dari semester sebelumnya."
+                  submitLabel="Salin Data"
+                  pendingText="Menyalin..."
+                >
+                  <input
+                    type="hidden"
+                    name="targetSemesterId"
+                    value={selectedSemester.id}
+                  />
+                  <Field
+                    label="Semester sumber"
+                    htmlFor="sourceSemesterId"
+                    name="sourceSemesterId"
+                    required
+                  >
+                    <Select
+                      id="sourceSemesterId"
+                      name="sourceSemesterId"
+                      defaultValue={copySources[0]?.id ?? ""}
+                      required
+                    >
+                      {copySources.map((semester) => (
+                        <option key={semester.id} value={semester.id}>
+                          {semester.name} — {semester.academicYearName}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                  <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-4">
+                    <Checkbox
+                      id="copySchedules"
+                      name="copySchedules"
+                      label="Salin jadwal mengajar"
+                      defaultChecked
+                    />
+                    <Checkbox
+                      id="copyTimeSlots"
+                      name="copyTimeSlots"
+                      label={
+                        timeSlotsEmpty
+                          ? "Salin susunan jam pelajaran"
+                          : "Susunan jam tujuan sudah ada"
+                      }
+                      defaultChecked={timeSlotsEmpty}
+                      disabled={!timeSlotsEmpty}
+                    />
+                  </div>
+                  <p className="text-xs text-slate-500">
+                    Kelas tujuan dipetakan mengikuti kenaikan tingkat (X → XI).
+                    Pastikan promosi kelas sudah dijalankan. Jadwal yang bentrok
+                    atau kelasnya belum memiliki padanan akan dilewati.
+                  </p>
                 </ModalForm>
               ) : null}
               <Link
@@ -313,9 +450,14 @@ export default async function SchedulePage({
             method="get"
             className={cn(
               "grid gap-3",
-              canManage ? "md:grid-cols-5" : "sm:grid-cols-2",
+              canManage ? "md:grid-cols-2 xl:grid-cols-7" : "sm:grid-cols-2 lg:grid-cols-3",
             )}
           >
+            <ListQueryHidden perPage={perPage} sort={sort} dir={dir} />
+            <SearchField
+              defaultValue={q}
+              placeholder="Cari guru, mapel, kelas, ruang..."
+            />
             <Field label="Semester" htmlFor="filterSemesterId" name="semesterId">
               <Select
                 id="filterSemesterId"
@@ -359,6 +501,20 @@ export default async function SchedulePage({
                     ))}
                   </Select>
                 </Field>
+                <Field label="Mapel" htmlFor="filterSubjectId" name="subjectId">
+                  <Select
+                    id="filterSubjectId"
+                    name="subjectId"
+                    defaultValue={subjectId ?? ""}
+                  >
+                    <option value="">Semua mapel</option>
+                    {subjects.map((subject) => (
+                      <option key={subject.id} value={subject.id}>
+                        {subject.name}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
                 <Field label="Hari" htmlFor="filterDayOfWeek" name="dayOfWeek">
                   <Select
                     id="filterDayOfWeek"
@@ -375,10 +531,10 @@ export default async function SchedulePage({
                 </Field>
               </>
             ) : null}
-            <div className="flex items-end">
+            <div className="flex items-end md:col-span-full">
               <button
                 type="submit"
-                className="h-11 w-full rounded-md bg-indigo-600 px-4 text-sm font-medium text-white hover:bg-indigo-700"
+                className="h-11 rounded-md bg-indigo-600 px-4 text-sm font-medium text-white hover:bg-indigo-700"
               >
                 Terapkan
               </button>
@@ -389,7 +545,7 @@ export default async function SchedulePage({
 
       {selectedSemester ? (
         <Card>
-          <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:space-y-0">
+          <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:space-y-0">
             <div>
               <CardTitle className="flex items-center gap-2 text-base">
                 <CalendarClock className="h-4 w-4" />
@@ -399,25 +555,44 @@ export default async function SchedulePage({
                 </Badge>
               </CardTitle>
               <CardDescription>
-                Istirahat dan waktu sholat ditampilkan di antara jam pelajaran.
-                Geser hari pada layar kecil untuk melihat hari lain.
+                Jadwal ditampilkan per kelas atau guru. Istirahat dan waktu
+                sholat tetap terlihat di antara jam pelajaran. Geser hari pada
+                layar kecil untuk melihat hari lain.
               </CardDescription>
             </div>
+            {canManage && (classes.length > 0 || teachers.length > 0) ? (
+              <CalendarScope
+                classes={classes.map((row) => ({
+                  id: row.id,
+                  label: classLabel(row),
+                }))}
+                teachers={teachers.map((row) => ({
+                  id: row.id,
+                  label: row.name,
+                }))}
+                selectedClassId={calendarClass?.id}
+                selectedTeacherId={selectedTeacherId}
+              />
+            ) : null}
           </CardHeader>
           <CardContent>
-            {schedules.length === 0 ? (
+            {calendarSchedules.length === 0 ? (
               <EmptyState
-                title="Belum ada jadwal pada filter ini"
+                title="Belum ada jadwal pada tampilan ini"
                 description={
                   canManage
-                    ? "Tambahkan jadwal melalui tombol Tambah Jadwal, atau ubah filter semester/guru/kelas."
+                    ? "Tambahkan jadwal melalui tombol Tambah Jadwal, salin dari semester sebelumnya, atau pilih kelas/guru lain pada Kalender untuk."
                     : "Jadwal akan tampil setelah Waka Kurikulum menambahkannya."
                 }
                 icon={<CalendarDays className="h-8 w-8" />}
               />
             ) : (
               <TeachingCalendar
-                key={params.dayOfWeek ?? "all"}
+                key={`${calendarClass?.id ?? selectedTeacherId ?? "all"}-${
+                  typeof params.dayOfWeek === "string"
+                    ? params.dayOfWeek
+                    : "all"
+                }`}
                 slots={timeSlots.map((slot) => ({
                   id: slot.id,
                   label: slot.label,
@@ -440,89 +615,146 @@ export default async function SchedulePage({
         </Card>
       ) : null}
 
-      {canManage && selectedSemester ? (
+      {canManage && selectedSemester && result ? (
         <div className="space-y-3">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
-              Daftar Jadwal {selectedSemester.name}{" "}
-              {selectedSemester.academicYearName}
-            </h2>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Hari / Jam</TableHead>
-                  <TableHead>Mapel</TableHead>
-                  <TableHead>Kelas</TableHead>
-                  <TableHead>Guru</TableHead>
-                  <TableHead>Ruang</TableHead>
-                  <TableHead className="text-right">Aksi</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {schedules.map((row) => (
-                  <TableRow key={row.id}>
-                    <TableCell>
-                      <p className="font-medium text-slate-900">
+          <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-500">
+            Daftar Jadwal {selectedSemester.name}{" "}
+            {selectedSemester.academicYearName}
+            <Badge variant="neutral">{result.total} slot</Badge>
+          </h2>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <SortableHead
+                  label="Hari / Jam"
+                  column="day"
+                  currentSort={sort}
+                  currentDir={dir}
+                  basePath={BASE_PATH}
+                  searchParams={params}
+                />
+                <SortableHead
+                  label="Mapel"
+                  column="subject"
+                  currentSort={sort}
+                  currentDir={dir}
+                  basePath={BASE_PATH}
+                  searchParams={params}
+                />
+                <SortableHead
+                  label="Kelas"
+                  column="class"
+                  currentSort={sort}
+                  currentDir={dir}
+                  basePath={BASE_PATH}
+                  searchParams={params}
+                />
+                <SortableHead
+                  label="Guru"
+                  column="teacher"
+                  currentSort={sort}
+                  currentDir={dir}
+                  basePath={BASE_PATH}
+                  searchParams={params}
+                />
+                <SortableHead
+                  label="Ruang"
+                  column="room"
+                  currentSort={sort}
+                  currentDir={dir}
+                  basePath={BASE_PATH}
+                  searchParams={params}
+                />
+                <TableHead className="text-right">Aksi</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {result.rows.map((row, index) => {
+                const previous = result.rows[index - 1];
+                const showGroup = !previous || previous.dayOfWeek !== row.dayOfWeek;
+                return (
+                  <Fragment key={row.id}>
+                    {showGroup ? (
+                      <TableGroupRow colSpan={6}>
                         {DAY_NAMES[row.dayOfWeek - 1]}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        Jam {row.periodStart}–{row.periodEnd}
-                      </p>
-                    </TableCell>
-                    <TableCell>{row.subjectName}</TableCell>
-                    <TableCell>
-                      {classLabel({
-                        gradeLevel: row.gradeLevel,
-                        section: row.section,
-                        departmentCode: row.departmentCode,
-                      })}
-                    </TableCell>
-                    <TableCell>{row.teacherName}</TableCell>
-                    <TableCell>{row.room ?? "—"}</TableCell>
-                    <TableCell>
-                      <div className="flex justify-end gap-2">
-                        <ModalForm
-                          action={saveSchedule}
-                          triggerLabel="Ubah"
-                          triggerIcon={<Pencil className="h-3.5 w-3.5" />}
-                          triggerVariant="ghost"
-                          triggerSize="sm"
-                          title="Ubah Jadwal"
-                          description="Perbarui guru, mapel, kelas, waktu, atau ruang."
-                          submitLabel="Simpan Perubahan"
-                        >
-                          <ScheduleFields
-                            row={row}
-                            semesterId={row.semesterId}
-                            teachers={teachers}
-                            subjects={subjects}
-                            classes={classes}
-                          />
-                        </ModalForm>
-                        <form action={removeSchedule}>
-                          <input type="hidden" name="id" value={row.id} />
-                          <ConfirmSubmit
-                            variant="ghost"
-                            size="sm"
-                            className="text-red-600 hover:bg-red-50 hover:text-red-700"
-                            message="Hapus jadwal ini? Jadwal yang sudah memiliki jurnal tidak dapat dihapus."
+                      </TableGroupRow>
+                    ) : null}
+                    <TableRow>
+                      <TableCell>
+                        <p className="font-medium text-slate-900">
+                          Jam {row.periodStart}–{row.periodEnd}
+                        </p>
+                        <p className="text-xs text-slate-500">Jam ke-{row.periodStart}</p>
+                      </TableCell>
+                      <TableCell>{row.subjectName}</TableCell>
+                      <TableCell>
+                        {classLabel({
+                          gradeLevel: row.gradeLevel,
+                          section: row.section,
+                          departmentCode: row.departmentCode,
+                        })}
+                      </TableCell>
+                      <TableCell>{row.teacherName}</TableCell>
+                      <TableCell>{row.room ?? "—"}</TableCell>
+                      <TableCell>
+                        <div className="flex justify-end gap-2">
+                          <ModalForm
+                            action={saveSchedule}
+                            returnTo={returnTo}
+                            triggerLabel="Ubah"
+                            triggerIcon={<Pencil className="h-3.5 w-3.5" />}
+                            triggerVariant="ghost"
+                            triggerSize="sm"
+                            title="Ubah Jadwal"
+                            description="Perbarui guru, mapel, kelas, waktu, atau ruang."
+                            submitLabel="Simpan Perubahan"
                           >
-                            Hapus
-                          </ConfirmSubmit>
-                        </form>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {schedules.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={6} className="text-center text-slate-500">
-                      Belum ada jadwal pada filter ini.
-                    </TableCell>
-                  </TableRow>
-                ) : null}
-              </TableBody>
-            </Table>
-          </div>
+                            <ScheduleFields
+                              row={row}
+                              semesterId={row.semesterId}
+                              teachers={teachers}
+                              subjects={subjects}
+                              classes={classes}
+                            />
+                          </ModalForm>
+                          <form action={removeSchedule}>
+                            <input type="hidden" name="id" value={row.id} />
+                            <input type="hidden" name="returnTo" value={returnTo} />
+                            <ConfirmSubmit
+                              variant="ghost"
+                              size="sm"
+                              className="text-red-600 hover:bg-red-50 hover:text-red-700"
+                              message="Hapus jadwal ini? Jadwal yang sudah memiliki jurnal tidak dapat dihapus."
+                            >
+                              Hapus
+                            </ConfirmSubmit>
+                          </form>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  </Fragment>
+                );
+              })}
+              {result.rows.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-center text-slate-500">
+                    Belum ada jadwal pada filter ini.
+                  </TableCell>
+                </TableRow>
+              ) : null}
+            </TableBody>
+          </Table>
+          <Pagination
+            basePath={BASE_PATH}
+            searchParams={params}
+            page={result.page}
+            perPage={result.perPage}
+            total={result.total}
+            totalPages={result.totalPages}
+            from={result.from}
+            to={result.to}
+          />
+        </div>
       ) : null}
     </div>
   );

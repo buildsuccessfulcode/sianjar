@@ -1,4 +1,4 @@
-"use server";
+﻿"use server";
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -10,6 +10,7 @@ import {
 } from "@/data-access/master";
 import { assertPermission } from "@/lib/dal";
 import { errorMessage } from "@/lib/errors";
+import { redirectWithFlash } from "@/lib/redirect";
 import { departmentSchema } from "@/lib/validators/master";
 import type { ActionState } from "@/lib/validators/common";
 
@@ -41,9 +42,12 @@ export async function saveDepartment(
 
   revalidatePath(PATH);
   redirect(
-    `${PATH}?success=${encodeURIComponent(
+    redirectWithFlash(
+      formData,
+      PATH,
+      "success",
       id ? "Jurusan berhasil diperbarui." : "Jurusan berhasil ditambahkan.",
-    )}`,
+    ),
   );
 }
 
@@ -52,8 +56,10 @@ export async function deleteDepartment(formData: FormData) {
     await assertPermission("manage:master_data");
     await softDeleteDepartment(String(formData.get("id")));
   } catch (error) {
-    redirect(`${PATH}?error=${encodeURIComponent(errorMessage(error))}`);
+    redirect(redirectWithFlash(formData, PATH, "error", errorMessage(error)));
   }
   revalidatePath(PATH);
-  redirect(`${PATH}?success=${encodeURIComponent("Jurusan dinonaktifkan.")}`);
+  redirect(
+    redirectWithFlash(formData, PATH, "success", "Jurusan dinonaktifkan."),
+  );
 }

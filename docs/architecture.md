@@ -17,6 +17,7 @@ Dokumen ini menjelaskan bagaimana kode disusun dan aturan yang harus diikuti saa
 | Validasi | Zod |
 | Ikon | lucide-react |
 | Password | bcryptjs |
+| Excel | exceljs (template + parsing import siswa) |
 | Deploy | Vercel + Neon |
 
 ### Keputusan penting
@@ -24,7 +25,7 @@ Dokumen ini menjelaskan bagaimana kode disusun dan aturan yang harus diikuti saa
 - **Cache Components dimatikan.** Dashboard bergantung pada session dan data real-time. `next.config.ts` tidak mengaktifkan `cacheComponents`/`partialPrefetching`. Halaman dashboard memakai dynamic rendering.
 - **Tidak memakai `middleware`/`proxy` untuk otorisasi.** Semua proteksi dilakukan di server component/data access/server action sesuai rekomendasi Next.js. Redirect optimistik ditangani `getCurrentUser()` di DAL.
 - **Tidak memakai Auth.js adapter.** Sesi JWT; `users` dan `user_roles` dibaca pada saat authorize/login. Ini menghindari tabel adapter tambahan.
-- **Server Actions adalah mutation layer.** Tidak ada route API CRUD kecuali export CSV.
+- **Server Actions adalah mutation layer.** Tidak ada route API CRUD kecuali export CSV dan unduh template import. Server Action upload memakai `bodySizeLimit: "6mb"` (file dibatasi 5 MB).
 - **Form menggunakan native form + `useActionState`/`useFormStatus`.** Zod adalah sumber validasi tunggal.
 
 ---
@@ -67,6 +68,7 @@ app/
       guru/actions.ts
       siswa/page.tsx
       siswa/actions.ts
+      siswa/template/route.ts   unduh template import .xlsx
       enrollment/page.tsx
       enrollment/actions.ts
     guru-mapel/page.tsx
@@ -92,6 +94,8 @@ lib/
   db.ts                          koneksi HTTP + Pool
   date.ts                        timezone Asia/Jakarta, format tanggal
   utils.ts                       cn(), format helper
+  pagination.ts                  parse page/perPage/sort + metadata + URL builder
+  excel/students.ts              template + parsing Excel import siswa (server-only)
   validators/                    schema Zod per domain
   audit.ts                       helper pencatatan audit
 
@@ -280,6 +284,14 @@ Ketentuan:
 - Server Actions dieksekusi berurutan per client; jangan mengandalkan `Promise.all` di client.
 - Untuk transaksi, gunakan `getDbPool()` dan `db.transaction()`.
 
+### Import file
+
+- Parsing file dilakukan di `lib/excel/*` dengan direktif `server-only`, bukan di komponen atau action.
+- Batasi tipe file, ukuran, dan jumlah baris sebelum parsing.
+- Validasi seluruh baris terlebih dahulu; jika ada baris error, batalkan import sebelum memanggil data-access.
+- Insert massal dan audit dijalankan dalam satu transaksi `getDbPool()`.
+- Unduh template memakai route handler terpisah dan tetap memeriksa permission.
+
 ### Format state
 
 ```ts
@@ -363,6 +375,8 @@ Audit ditulis dalam transaksi yang sama dengan mutasi agar konsisten.
 - Warna status dipusatkan di `components/ui/badge.tsx` dan helper `lib/status.ts`.
 - Semua form memakai `Field`/`Input`/`Select` yang sudah menyediakan label, error, dan `aria-describedby`.
 - Tombol submit memakai `SubmitButton` (`useFormStatus`).
+- Daftar data memakai pola yang sama: query string (`q`, filter, `sort`, `dir`, `page`, `perPage`) → data-access `list*Paged` → `FilterBar` + `SortableHead`/`SortLinks` + `Pagination`. Parser dan builder ada di `lib/pagination.ts`.
+- Data-access list wajib memakai `limit`/`offset` dan mengembalikan `{ rows, total, page, perPage, totalPages, from, to }`; jangan mengambil seluruh tabel lalu memotong di halaman.
 - Jangan menambahkan dependency UI baru tanpa memperbarui dokumen ini.
 
 ---

@@ -46,6 +46,27 @@ export const timeSlotSchema = z
     }
   });
 
+const importCheckbox = z.preprocess(
+  (value) => value === "on" || value === "true" || value === true,
+  z.boolean(),
+);
+
+export const scheduleCopySchema = z
+  .object({
+    sourceSemesterId: uuidSchema,
+    targetSemesterId: uuidSchema,
+    copyTimeSlots: importCheckbox.optional().default(false),
+    copySchedules: importCheckbox.optional().default(false),
+  })
+  .refine((data) => data.sourceSemesterId !== data.targetSemesterId, {
+    message: "Semester sumber dan tujuan tidak boleh sama",
+    path: ["sourceSemesterId"],
+  })
+  .refine((data) => data.copyTimeSlots || data.copySchedules, {
+    message: "Pilih minimal satu data yang akan disalin",
+    path: ["copySchedules"],
+  });
+
 export const scheduleSchema = z
   .object({
     semesterId: uuidSchema,

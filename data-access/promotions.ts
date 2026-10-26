@@ -3,10 +3,13 @@ import "server-only";
 import {
   and,
   asc,
+  count,
   desc,
   eq,
+  ilike,
   inArray,
   isNull,
+  or,
 } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 
@@ -19,7 +22,10 @@ import {
   studentEnrollments,
   students,
 } from "@/db/schema";
-import type { PromotionAction } from "@/db/schema/enums";
+import type {
+  PromotionAction,
+  PromotionBatchStatus,
+} from "@/db/schema/enums";
 import { writeAudit } from "@/lib/audit";
 import { getDb, getDbPool } from "@/lib/db";
 import {
@@ -27,6 +33,13 @@ import {
   NotFoundError,
   ValidationError,
 } from "@/lib/errors";
+import {
+  likePattern,
+  normalizePagination,
+  paginated,
+  type Paginated,
+  type SortDirection,
+} from "@/lib/pagination";
 
 type ClassRow = {
   id: string;
@@ -653,3 +666,72 @@ export async function getPromotionBatch(id: string) {
   return rows[0] ?? null;
 }
 
+
+export type PromotionBatchListFilters = {
+  q?: string;
+  status?: PromotionBatchStatus;
+  sort?: "createdAt" | "status" | "transition";
+  dir?: SortDirection;
+  page?: number;
+  perPage?: number;
+};
+
+export async function listPromotionBatchesPaged(
+  filters: PromotionBatchListFilters,
+): Promise<Paginated<Awaited<ReturnType<typeof listPromotionBatches>>[number]>> {
+  const db = getDb();
+  const perPage = filters.perPage ?? 20;
+  const page = filters.page ?? 1;
+  const pattern = filters.q ? likePattern(filters.q) : undefined;
+
+  const conditions = [
+    filters.status ? eq(promotionBatches.status, filters.status) : undefined,
+    pattern
+      ? or(ilike(fromYears.name, pattern), ilike(toYears.name, pattern))
+      : undefined,
+  ];
+
+  const [totalRow] = await db
+    .select({ total: count(promotionBatches.id) })
+    .from(promotionBatches)
+    .innerJoin(
+      fromYears,
+      eq(promotionBatches.fromAcademicYearId, fromYears.id),
+    )
+    .innerJoin(toYears, eq(promotionBatches.toAcademicYearId, toYears.id))
+    .where(and(...conditions));
+  const total = Number(totalRow?.total ?? 0);
+  const meta = normalizePagination(total, page, perPage);
+
+  const sort = filters.sort ?? "createdAt";
+  const dir = filters.dir ?? "desc";
+  const sortColumn =
+    sort === "status"
+      ? promotionBatches.status
+      : sort === "transition"
+        ? fromYears.name
+        : promotionBatches.createdAt;
+
+  const rows = await db
+    .select({
+      id: promotionBatches.id,
+      status: promotionBatches.status,
+      summary: promotionBatches.summary,
+      committedAt: promotionBatches.committedAt,
+      cancelledAt: promotionBatches.cancelledAt,
+      fromYearName: fromYears.name,
+      toYearName: toYears.name,
+    })
+    .from(promotionBatches)
+    .innerJoin(
+      fromYears,
+      eq(promotionBatches.fromAcademicYearId, fromYears.id),
+    )
+    .innerJoin(toYears, eq(promotionBatches.toAcademicYearId, toYears.id))
+    .where(and(...conditions))
+    .orderBy(dir === "asc" ? asc(sortColumn) : desc(sortColumn))
+    .limit(perPage)
+    .offset(meta.offset);
+
+  return paginated(rows, total, meta.page, perPage);
+}

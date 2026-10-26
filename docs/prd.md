@@ -56,7 +56,7 @@ Aplikasi dirancang untuk berjalan di stack gratis pada tahap pilot: Vercel Hobby
 - Modul keuangan, PPDB, inventaris, raport, e-learning.
 - Multi-sekolah (multi-tenant).
 - Integrasi Dapodik.
-- Import CSV siswa/guru (P1).
+- Import CSV guru (P1; import Excel siswa sudah tersedia).
 - Override status promosi per siswa melalui UI (P1; backend mendukung status per enrollment).
 - Edit jurnal dengan batas waktu 7 hari (P1; v1 mengizinkan guru pemilik/Admin tanpa batas).
 
@@ -174,8 +174,9 @@ Aplikasi dirancang untuk berjalan di stack gratis pada tahap pilot: Vercel Hobby
 
 **Sebagai** Admin, **saya ingin** CRUD tahun ajaran, semester, jurusan, kelas, mapel, guru, siswa, dan enrollment **agar** data dasar siap sebelum operasional.
 
-- Soft delete (`deleted_at`) untuk entitas yang punya relasi historis; data yang di-soft-delete tidak ditampilkan pada daftar v1 (filter status penuh P1).
+- Soft delete (`deleted_at`) untuk entitas yang punya relasi historis; data yang di-soft-delete tidak ditampilkan pada daftar operasional. Daftar menyediakan filter status aktif/nonaktif.
 - Master data yang sudah direferensikan tidak di-hard-delete.
+- Semua daftar master mendukung pencarian server-side, filter, sorting, pagination, dan pilihan jumlah baris per halaman.
 - Validasi unik: nama tahun ajaran, kode jurusan, kode mapel, NISN, NIP, email user, dan kombinasi kelas.
 - Hanya satu tahun ajaran aktif dan hanya satu semester aktif pada satu waktu.
 - Guru = `users` + role `GURU` + `teacher_profiles`.
@@ -207,7 +208,8 @@ Prioritas: **P0** wajib v1, **P1** nice-to-have, **P2** roadmap.
 - CRUD tahun ajaran + aktivasi (hanya satu aktif).
 - CRUD semester + aktivasi.
 - CRUD jurusan, kelas, mapel, guru, siswa.
-- Enrollment manual satuan dan massal (checklist siswa per kelas), termasuk ubah kelas/status dan pindah kelas massal pada tahun ajaran yang sama. Enrollment massal melewati siswa yang sudah terdaftar dan melaporkan jumlahnya.
+- Enrollment manual satuan dan massal (checklist siswa per kelas), termasuk ubah kelas/status, pindah kelas massal, dan ubah status massal pada tahun ajaran yang sama. Enrollment massal melewati siswa yang sudah terdaftar dan melaporkan jumlahnya.
+- Mapping guru–mapel dapat ditambahkan massal (satu guru, banyak mapel) dengan melewati mapping yang sudah ada.
 - Enrollment melalui promosi untuk kenaikan tahun ajaran.
 - Semua tabel master memiliki `created_at`, `updated_at`, `deleted_at` bila relevan.
 
@@ -218,10 +220,15 @@ Prioritas: **P0** wajib v1, **P1** nice-to-have, **P2** roadmap.
 - CRUD susunan jam per semester dengan jenis `LESSON`, `BREAK`, atau `PRAYER`; mendukung istirahat dan waktu sholat.
 - Seed contoh susunan jam memuat 8 jam pelajaran, dua istirahat, dan sholat dzuhur.
 - Tampilan kalender mingguan (grid di desktop/tablet, tab hari + timeline di mobile).
-- Filter guru/kelas/hari untuk Admin/Waka; guru hanya melihat jadwal sendiri.
-- Tampilan daftar tetap tersedia di bawah kalender untuk Admin/Waka yang mengelola slot.
+- Filter guru/kelas/mapel/hari + pencarian untuk Admin/Waka; guru hanya melihat jadwal sendiri.
+- Tampilan daftar tetap tersedia di bawah kalender untuk Admin/Waka yang mengelola slot, dengan sorting, grouping per hari, dan pagination server-side.
 - Jika susunan jam sudah diatur, nomor jam pada jadwal harus ada di susunan jam (`LESSON`); jika belum diatur, jadwal tetap boleh dibuat.
-- Copy jadwal antar semester — P1.
+- Copy jadwal dan susunan jam dari semester sebelumnya — P1 (diimplementasikan).
+  - Sumber dipilih dari semester yang lebih awal; default semester terdekat.
+  - Susunan jam disalin hanya jika semester tujuan belum memiliki susunan jam.
+  - Kelas tujuan dipetakan mengikuti aturan promosi atau kenaikan tingkat (X → XI); kelas tanpa padanan dilewati.
+  - Jadwal dengan guru-mapel tidak terpetakan, nomor jam tidak tersedia, atau bentrok dengan jadwal tujuan dilewati dan dilaporkan.
+  - Penyalinan memakai satu transaksi dan dicatat di audit log.
 - Susunan jam berbeda per hari (mis. Jumat lebih pendek) — P1.
 
 ### FR-04 Jurnal dan Absensi — P0
@@ -231,6 +238,7 @@ Prioritas: **P0** wajib v1, **P1** nice-to-have, **P2** roadmap.
 - Transaksi atomik.
 - Unique `(schedule_id, date)`.
 - Riwayat jurnal per guru dan monitoring semua jurnal.
+- Riwayat mendukung pencarian materi/aktivitas/guru/mapel/kelas, filter semester/tanggal/guru/kelas/mapel, sorting, grouping per tanggal, dan pagination server-side.
 - Detail jurnal menampilkan daftar hadir dan tidak hadir.
 - Window edit 7 hari — P1.
 
@@ -245,17 +253,23 @@ Prioritas: **P0** wajib v1, **P1** nice-to-have, **P2** roadmap.
 ### FR-06 Rekap dan Laporan — P0
 
 - Rekap absensi per siswa/kelas/mapel/periode.
+- Ringkasan rekap per kelas, pencarian siswa, sorting, dan pagination server-side.
 - Rekap jurnal per guru/periode.
-- Export CSV rekap absensi.
+- Export CSV rekap absensi mengikuti seluruh filter aktif (termasuk pencarian).
 - Dashboard monitoring coverage harian.
 
 ### FR-07 Audit Log — P1 (diimplementasikan untuk aksi kritis)
 
 - Jadwal, promosi, dan aktivasi tahun ajaran.
+- Filter aktor/aksi/entitas/tanggal, pencarian, sorting, dan pagination server-side.
 
-### FR-08 Import CSV — P1
+### FR-08 Import Excel Siswa — P1 (diimplementasikan)
 
-- Belum diimplementasikan.
+- Admin dapat mengunduh template `.xlsx` dan mengunggahnya kembali dari halaman `/admin/siswa`.
+- Kolom template: NISN, Nama Lengkap, Jenis Kelamin (L/P), Tanggal Lahir (opsional, `YYYY-MM-DD`).
+- Validasi seluruh baris sebelum insert; file dengan baris bermasalah ditolak dengan laporan nomor baris.
+- NISN yang sudah terdaftar dilewati dan dilaporkan; NISN duplikat di dalam file dianggap error.
+- Maksimal 5000 baris dan 5 MB per file. Import siswa dicatat di audit log.
 
 ### FR-09 Notifikasi In-App — P2
 
@@ -287,7 +301,7 @@ Prioritas: **P0** wajib v1, **P1** nice-to-have, **P2** roadmap.
 | Aspek | Target |
 |---|---|
 | Performa | TTFB halaman utama < 2 detik; query DB < 200 ms |
-| Skalabilitas | 1.500 siswa, 80 guru, 60 kelas, ±50.000 jurnal/tahun |
+| Skalabilitas | 1.500 siswa, 80 guru, 60 kelas, ±50.000 jurnal/tahun; daftar data memakai pagination server-side (default 20, opsi 10/20/50/100) |
 | Availability | 99% best effort pada Hobby tier |
 | Keamanan | bcrypt, cookie httpOnly, CSRF bawaan Server Actions/Auth.js, otorisasi di DAL/action |
 | Aksesibilitas | WCAG 2.1 AA untuk alur utama |

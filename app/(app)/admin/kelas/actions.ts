@@ -10,6 +10,7 @@ import {
 } from "@/data-access/master";
 import { assertPermission } from "@/lib/dal";
 import { errorMessage } from "@/lib/errors";
+import { redirectWithFlash } from "@/lib/redirect";
 import { classSchema } from "@/lib/validators/master";
 import type { ActionState } from "@/lib/validators/common";
 
@@ -26,7 +27,7 @@ export async function saveClass(
       academicYearId: formData.get("academicYearId"),
       departmentId: formData.get("departmentId"),
       gradeLevel: formData.get("gradeLevel"),
-      section: formData.get("section"),
+      section: String(formData.get("section") ?? ""),
       homeroomTeacherId: formData.get("homeroomTeacherId"),
     });
     if (!parsed.success) {
@@ -46,9 +47,12 @@ export async function saveClass(
   revalidatePath("/jadwal");
   revalidatePath("/admin/enrollment");
   redirect(
-    `${PATH}?success=${encodeURIComponent(
+    redirectWithFlash(
+      formData,
+      PATH,
+      "success",
       id ? "Kelas berhasil diperbarui." : "Kelas berhasil ditambahkan.",
-    )}`,
+    ),
   );
 }
 
@@ -57,8 +61,8 @@ export async function deleteClass(formData: FormData) {
     await assertPermission("manage:master_data");
     await softDeleteClass(String(formData.get("id")));
   } catch (error) {
-    redirect(`${PATH}?error=${encodeURIComponent(errorMessage(error))}`);
+    redirect(redirectWithFlash(formData, PATH, "error", errorMessage(error)));
   }
   revalidatePath(PATH);
-  redirect(`${PATH}?success=${encodeURIComponent("Kelas dinonaktifkan.")}`);
+  redirect(redirectWithFlash(formData, PATH, "success", "Kelas dinonaktifkan."));
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { ArrowRightLeft, Pencil } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -45,7 +45,10 @@ export function EnrollmentTable({
   statusOptions,
   updateAction,
   moveAction,
+  statusAction,
   removeAction,
+  sortControls,
+  returnTo,
 }: {
   rows: EnrollmentRow[];
   classes: ClassOption[];
@@ -53,15 +56,22 @@ export function EnrollmentTable({
   statusOptions: StatusOption[];
   updateAction: ActionStateFn;
   moveAction: FormActionFn;
+  statusAction: FormActionFn;
   removeAction: FormActionFn;
+  sortControls?: ReactNode;
+  returnTo: string;
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [targetClassId, setTargetClassId] = useState("");
+  const [bulkStatus, setBulkStatus] = useState("ACTIVE");
 
   const allSelected =
     rows.length > 0 && rows.every((row) => selected.has(row.id));
   const targetLabel =
     classes.find((row) => row.id === targetClassId)?.label ?? "kelas tujuan";
+  const statusLabel =
+    statusOptions.find((option) => option.value === bulkStatus)?.label ??
+    bulkStatus;
 
   const toggleRow = (id: string) => {
     setSelected((current) => {
@@ -80,11 +90,13 @@ export function EnrollmentTable({
 
   return (
     <div className="space-y-3">
+      {sortControls ? <div className="px-1">{sortControls}</div> : null}
       <form
         action={moveAction}
         className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:flex-row sm:items-end"
       >
         <input type="hidden" name="year" value={yearId} />
+        <input type="hidden" name="returnTo" value={returnTo} />
         {[...selected].map((id) => (
           <input key={id} type="hidden" name="enrollmentIds" value={id} />
         ))}
@@ -124,6 +136,51 @@ export function EnrollmentTable({
             {selected.size > 0
               ? `${selected.size} siswa dipilih`
               : "Centang siswa untuk memindahkan kelas"}
+          </span>
+        </div>
+      </form>
+
+      <form
+        action={statusAction}
+        className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3 sm:flex-row sm:items-end"
+      >
+        <input type="hidden" name="year" value={yearId} />
+        <input type="hidden" name="returnTo" value={returnTo} />
+        {[...selected].map((id) => (
+          <input key={id} type="hidden" name="enrollmentIds" value={id} />
+        ))}
+        <div className="w-full sm:max-w-xs">
+          <Field label="Ubah status terpilih" htmlFor="bulk-status">
+            <Select
+              id="bulk-status"
+              name="status"
+              value={bulkStatus}
+              onChange={(event) => setBulkStatus(event.target.value)}
+              required
+            >
+              {statusOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+        <div className="flex items-center gap-3 pb-0.5">
+          <ConfirmSubmit
+            size="md"
+            variant="secondary"
+            message={`Ubah status ${selected.size} enrollment menjadi ${statusLabel}?`}
+            confirmLabel="Ya, ubah status"
+            confirmVariant="primary"
+            disabled={selected.size === 0}
+          >
+            Ubah Status ({selected.size})
+          </ConfirmSubmit>
+          <span className="text-sm text-slate-500">
+            {selected.size > 0
+              ? "Hanya enrollment yang dicentang yang berubah"
+              : "Centang siswa untuk mengubah status massal"}
           </span>
         </div>
       </form>
@@ -180,6 +237,7 @@ export function EnrollmentTable({
                 <div className="flex flex-wrap justify-end gap-1">
                   <ModalForm
                     action={updateAction}
+                    returnTo={returnTo}
                     triggerLabel="Ubah"
                     triggerIcon={<Pencil className="h-4 w-4" />}
                     triggerVariant="ghost"
@@ -231,6 +289,7 @@ export function EnrollmentTable({
                   <form action={removeAction}>
                     <input type="hidden" name="id" value={row.id} />
                     <input type="hidden" name="year" value={yearId} />
+                    <input type="hidden" name="returnTo" value={returnTo} />
                     <ConfirmSubmit
                       variant="ghost"
                       size="sm"

@@ -4,13 +4,18 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import {
+  copyScheduleData,
   createSchedule,
   deleteSchedule,
   updateSchedule,
 } from "@/data-access/schedules";
 import { assertPermission } from "@/lib/dal";
 import { errorMessage } from "@/lib/errors";
-import { scheduleSchema } from "@/lib/validators/schedule";
+import { redirectWithFlash } from "@/lib/redirect";
+import {
+  scheduleCopySchema,
+  scheduleSchema,
+} from "@/lib/validators/schedule";
 import type { ActionState } from "@/lib/validators/common";
 
 const PATH = "/jadwal";
@@ -52,10 +57,69 @@ export async function saveSchedule(
 
   revalidate();
   redirect(
-    `${PATH}?success=${encodeURIComponent(
+    redirectWithFlash(
+      formData,
+      PATH,
+      "success",
       id ? "Jadwal berhasil diperbarui." : "Jadwal berhasil ditambahkan.",
-    )}`,
+    ),
   );
+}
+
+export async function copyScheduleDataAction(
+  _state: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  let result: Awaited<ReturnType<typeof copyScheduleData>>;
+  try {
+    const user = await assertPermission("manage:jadwal");
+    const parsed = scheduleCopySchema.safeParse({
+      sourceSemesterId: formData.get("sourceSemesterId"),
+      targetSemesterId: formData.get("targetSemesterId"),
+      copyTimeSlots: formData.get("copyTimeSlots"),
+      copySchedules: formData.get("copySchedules"),
+    });
+    if (!parsed.success) {
+      return {
+        status: "error",
+        message:
+          parsed.error.issues[0]?.message ??
+          "Periksa kembali pilihan penyalinan jadwal.",
+        fieldErrors: parsed.error.flatten().fieldErrors,
+      };
+    }
+    result = await copyScheduleData(parsed.data, user.id);
+  } catch (error) {
+    return { status: "error", message: errorMessage(error) };
+  }
+
+  revalidate();
+  revalidatePath("/jadwal/jam");
+
+  const notes = result.notes.slice(0, 3).join(" ");
+  if (result.timeSlotsCopied === 0 && result.schedulesCopied === 0) {
+    return {
+      status: "error",
+      message: `Tidak ada data yang disalin.${notes ? ` ${notes}` : ""}`,
+    };
+  }
+
+  const parts = [
+    result.timeSlotsCopied > 0
+      ? `${result.timeSlotsCopied} susunan jam disalin`
+      : undefined,
+    result.schedulesCopied > 0
+      ? `${result.schedulesCopied} jadwal disalin`
+      : undefined,
+    result.schedulesSkipped > 0
+      ? `${result.schedulesSkipped} jadwal dilewati`
+      : undefined,
+  ].filter((part): part is string => Boolean(part));
+
+  return {
+    status: "success",
+    message: `${parts.join(", ")}.${notes ? ` ${notes}` : ""}`,
+  };
 }
 
 export async function removeSchedule(formData: FormData) {
@@ -63,8 +127,8 @@ export async function removeSchedule(formData: FormData) {
     const user = await assertPermission("manage:jadwal");
     await deleteSchedule(String(formData.get("id")), user.id);
   } catch (error) {
-    redirect(`${PATH}?error=${encodeURIComponent(errorMessage(error))}`);
+    redirect(redirectWithFlash(formData, PATH, "error", errorMessage(error)));
   }
   revalidate();
-  redirect(`${PATH}?success=${encodeURIComponent("Jadwal dihapus.")}`);
+  redirect(redirectWithFlash(formData, PATH, "success", "Jadwal dihapus."));
 }

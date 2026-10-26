@@ -21,13 +21,16 @@ import {
 } from "@/components/ui/card";
 import { ConfirmSubmit } from "@/components/ui/confirm-submit";
 import { EmptyState } from "@/components/ui/empty-state";
+import { FilterBar } from "@/components/ui/filter-bar";
 import { Field, Input, Select } from "@/components/ui/form";
 import { ModalForm } from "@/components/ui/modal-form";
 import { PageHeader } from "@/components/ui/page-header";
+import { SearchField } from "@/components/ui/search-field";
 import { getActiveSemester, listSemesters } from "@/data-access/master";
 import { listTimeSlots } from "@/data-access/time-slots";
 import { TIME_SLOT_KIND_LABELS } from "@/db/schema/enums";
 import { requirePagePermission } from "@/lib/dal";
+import { buildListHref } from "@/lib/pagination";
 import { cn } from "@/lib/utils";
 import {
   removeTimeSlot,
@@ -38,9 +41,7 @@ import {
 export const metadata: Metadata = { title: "Jam Pelajaran" };
 export const dynamic = "force-dynamic";
 
-type SearchParams = Promise<{
-  semesterId?: string;
-}>;
+type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
 type SlotRow = Awaited<ReturnType<typeof listTimeSlots>>[number];
 
@@ -133,6 +134,13 @@ export default async function TimeSlotPage({
 }) {
   await requirePagePermission("manage:jadwal");
   const params = await searchParams;
+  const q = typeof params.q === "string" ? params.q : undefined;
+  const kind =
+    params.kind === "LESSON" ||
+    params.kind === "BREAK" ||
+    params.kind === "PRAYER"
+      ? params.kind
+      : undefined;
 
   const [semesters, activeSemester] = await Promise.all([
     listSemesters(),
@@ -149,9 +157,24 @@ export default async function TimeSlotPage({
     ? await listTimeSlots(selectedSemester.id)
     : [];
 
+  const filteredSlots = slots.filter((slot) => {
+    const matchesKind = kind ? slot.kind === kind : true;
+    const matchesQuery = q
+      ? slot.label.toLowerCase().includes(q.toLowerCase())
+      : true;
+    return matchesKind && matchesQuery;
+  });
+  const lessonCount = slots.filter((slot) => slot.kind === "LESSON").length;
+  const breakCount = slots.filter((slot) => slot.kind === "BREAK").length;
+  const prayerCount = slots.filter((slot) => slot.kind === "PRAYER").length;
+
   const backHref = selectedSemester
     ? `/jadwal?semesterId=${selectedSemester.id}`
     : "/jadwal";
+  const selfHref = selectedSemester
+    ? `/jadwal/jam?semesterId=${selectedSemester.id}`
+    : "/jadwal/jam";
+  const returnTo = buildListHref("/jadwal/jam", params);
 
   return (
     <div className="space-y-6">
@@ -163,6 +186,7 @@ export default async function TimeSlotPage({
             {selectedSemester ? (
               <ModalForm
                 action={saveTimeSlot}
+                returnTo={returnTo}
                 triggerLabel="Tambah Jam"
                 triggerIcon={<Plus className="h-4 w-4" />}
                 title="Tambah Jam"
@@ -222,6 +246,32 @@ export default async function TimeSlotPage({
         </CardContent>
       </Card>
 
+      <FilterBar
+        resetHref={selfHref}
+        description="Cari nama jam atau saring jenisnya. Urutan tetap mengikuti waktu mulai."
+        formClassName="sm:grid-cols-2 lg:grid-cols-4"
+      >
+        {selectedSemester ? (
+          <input
+            type="hidden"
+            name="semesterId"
+            value={selectedSemester.id}
+          />
+        ) : null}
+        <SearchField
+          defaultValue={q}
+          placeholder="Cari nama jam / istirahat..."
+        />
+        <Field label="Jenis" htmlFor="kind">
+          <Select id="kind" name="kind" defaultValue={kind ?? ""}>
+            <option value="">Semua jenis</option>
+            <option value="LESSON">Jam pelajaran</option>
+            <option value="BREAK">Istirahat</option>
+            <option value="PRAYER">Sholat / ibadah</option>
+          </Select>
+        </Field>
+      </FilterBar>
+
       {selectedSemester ? (
         <div className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -229,7 +279,12 @@ export default async function TimeSlotPage({
               Susunan Jam {selectedSemester.name}{" "}
               {selectedSemester.academicYearName}
             </h2>
-            <Badge variant="neutral">{slots.length} entri</Badge>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="neutral">{filteredSlots.length} entri</Badge>
+              <Badge variant="primary">{lessonCount} pelajaran</Badge>
+              <Badge variant="warning">{breakCount} istirahat</Badge>
+              <Badge variant="info">{prayerCount} ibadah</Badge>
+            </div>
           </div>
 
           {slots.length === 0 ? (
@@ -244,6 +299,7 @@ export default async function TimeSlotPage({
                     name="semesterId"
                     value={selectedSemester.id}
                   />
+                  <input type="hidden" name="returnTo" value={returnTo} />
                   <ConfirmSubmit
                     confirmVariant="primary"
                     confirmLabel="Ya, gunakan"
@@ -258,11 +314,17 @@ export default async function TimeSlotPage({
                 </form>
               }
             />
+          ) : filteredSlots.length === 0 ? (
+            <EmptyState
+              title="Tidak ada jam pada filter ini"
+              description="Ubah kata kunci atau jenis jam, lalu terapkan kembali."
+              icon={<Clock className="h-8 w-8" />}
+            />
           ) : (
             <Card>
               <CardContent className="p-0">
                 <ul className="divide-y divide-slate-100">
-                  {slots.map((slot) => (
+                  {filteredSlots.map((slot) => (
                     <li
                       key={slot.id}
                       className={cn(
@@ -299,6 +361,7 @@ export default async function TimeSlotPage({
                       <div className="flex shrink-0 items-center gap-1 self-end sm:self-auto">
                         <ModalForm
                           action={saveTimeSlot}
+                          returnTo={returnTo}
                           triggerLabel="Ubah"
                           triggerIcon={<Pencil className="h-3.5 w-3.5" />}
                           triggerVariant="ghost"
@@ -319,6 +382,7 @@ export default async function TimeSlotPage({
                             value={selectedSemester.id}
                           />
                           <input type="hidden" name="id" value={slot.id} />
+                          <input type="hidden" name="returnTo" value={returnTo} />
                           <ConfirmSubmit
                             variant="ghost"
                             size="sm"

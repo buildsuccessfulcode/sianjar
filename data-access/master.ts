@@ -1,4 +1,4 @@
-import "server-only";
+﻿import "server-only";
 
 import bcrypt from "bcryptjs";
 import {
@@ -7,8 +7,10 @@ import {
   count,
   desc,
   eq,
+  ilike,
   inArray,
   isNull,
+  or,
   sql,
 } from "drizzle-orm";
 import type { z } from "zod";
@@ -33,20 +35,31 @@ import {
   NotFoundError,
   ValidationError,
 } from "@/lib/errors";
+import type { EnrollmentStatus } from "@/db/schema/enums";
 import { writeAudit } from "@/lib/audit";
+import {
+  likePattern,
+  normalizePagination,
+  paginated,
+  type Paginated,
+  type SortDirection,
+} from "@/lib/pagination";
 import type {
   academicYearSchema,
   classSchema,
   departmentSchema,
   enrollmentBulkSchema,
+  enrollmentBulkStatusSchema,
   enrollmentMoveSchema,
   enrollmentSchema,
   enrollmentUpdateSchema,
   semesterSchema,
   studentCreateSchema,
+  studentImportRowSchema,
   studentUpdateSchema,
   subjectSchema,
   teacherCreateSchema,
+  teacherSubjectBulkSchema,
   teacherUpdateSchema,
 } from "@/lib/validators/master";
 
@@ -59,15 +72,27 @@ export type TeacherCreateInput = z.infer<typeof teacherCreateSchema>;
 export type TeacherUpdateInput = z.infer<typeof teacherUpdateSchema>;
 export type StudentCreateInput = z.infer<typeof studentCreateSchema>;
 export type StudentUpdateInput = z.infer<typeof studentUpdateSchema>;
+export type StudentImportInput = z.infer<typeof studentImportRowSchema>;
 export type EnrollmentInput = z.infer<typeof enrollmentSchema>;
 export type EnrollmentUpdateInput = z.infer<typeof enrollmentUpdateSchema>;
 export type EnrollmentBulkInput = z.infer<typeof enrollmentBulkSchema>;
+export type EnrollmentBulkStatusInput = z.infer<
+  typeof enrollmentBulkStatusSchema
+>;
 export type EnrollmentMoveInput = z.infer<typeof enrollmentMoveSchema>;
+export type TeacherSubjectBulkInput = z.infer<
+  typeof teacherSubjectBulkSchema
+>;
 
 export type BulkEnrollmentResult = {
   created: number;
   reactivated: number;
   skipped: { studentId: string; name: string; reason: string }[];
+};
+
+export type StudentImportResult = {
+  created: number;
+  skipped: { nisn: string; name: string; reason: string }[];
 };
 
 export async function listAcademicYears() {
@@ -698,15 +723,54 @@ export async function listTeacherSubjects(teacherId?: string) {
     .orderBy(asc(subjects.name));
 }
 
+export async function listTeacherSubjectsByTeacherIds(teacherIds: string[]) {
+  if (teacherIds.length === 0) return [];
+  return getDb()
+    .select({
+      teacherId: teacherSubjects.teacherId,
+      subjectId: teacherSubjects.subjectId,
+      subjectCode: subjects.code,
+      subjectName: subjects.name,
+    })
+    .from(teacherSubjects)
+    .innerJoin(subjects, eq(teacherSubjects.subjectId, subjects.id))
+    .where(
+      and(
+        inArray(teacherSubjects.teacherId, teacherIds),
+        isNull(subjects.deletedAt),
+      ),
+    )
+    .orderBy(asc(subjects.name));
+}
+
 export async function addTeacherSubject(teacherId: string, subjectId: string) {
   try {
     await getDb().insert(teacherSubjects).values({ teacherId, subjectId });
   } catch (error) {
     if (isUniqueViolation(error)) {
-      throw new ConflictError("Mapping guru–mapel sudah ada.");
+      throw new ConflictError("Mapping guruâ€“mapel sudah ada.");
     }
     throw error;
   }
+}
+
+export async function addTeacherSubjectsBulk(input: TeacherSubjectBulkInput) {
+  const subjectIds = [...new Set(input.subjectIds)];
+  const rows = await getDb()
+    .insert(teacherSubjects)
+    .values(
+      subjectIds.map((subjectId) => ({
+        teacherId: input.teacherId,
+        subjectId,
+      })),
+    )
+    .onConflictDoNothing()
+    .returning({ subjectId: teacherSubjects.subjectId });
+
+  return {
+    created: rows.length,
+    skipped: subjectIds.length - rows.length,
+  };
 }
 
 export async function removeTeacherSubject(teacherId: string, subjectId: string) {
@@ -795,6 +859,62 @@ export async function createStudent(input: StudentCreateInput) {
     }
     throw error;
   }
+}
+
+export async function importStudents(
+  rows: StudentImportInput[],
+  actorId: string,
+): Promise<StudentImportResult> {
+  if (rows.length === 0) {
+    return { created: 0, skipped: [] };
+  }
+
+  const db = getDbPool();
+  return db.transaction(async (tx) => {
+    const nisns = rows.map((row) => row.nisn);
+    const existingRows = await tx
+      .select({ nisn: students.nisn })
+      .from(students)
+      .where(inArray(students.nisn, nisns));
+    const existing = new Set(existingRows.map((row) => row.nisn));
+
+    const toInsert: (typeof students.$inferInsert)[] = [];
+    const skipped: StudentImportResult["skipped"] = [];
+
+    for (const row of rows) {
+      if (existing.has(row.nisn)) {
+        skipped.push({
+          nisn: row.nisn,
+          name: row.name,
+          reason: "NISN sudah terdaftar.",
+        });
+        continue;
+      }
+
+      existing.add(row.nisn);
+      toInsert.push({
+        nisn: row.nisn,
+        name: row.name,
+        gender: row.gender,
+        birthDate: row.birthDate ?? null,
+      });
+    }
+
+    if (toInsert.length > 0) {
+      await tx.insert(students).values(toInsert);
+      await writeAudit(tx, {
+        actorId,
+        action: "student.import",
+        entityType: "student",
+        payload: {
+          created: toInsert.length,
+          skipped: skipped.length,
+        },
+      });
+    }
+
+    return { created: toInsert.length, skipped };
+  });
 }
 
 export async function updateStudent(id: string, input: StudentUpdateInput) {
@@ -1162,6 +1282,24 @@ export async function moveEnrollmentsBulk(input: EnrollmentMoveInput) {
   });
 }
 
+export async function updateEnrollmentsStatusBulk(
+  input: EnrollmentBulkStatusInput,
+) {
+  const enrollmentIds = [...new Set(input.enrollmentIds)];
+  const rows = await getDb()
+    .update(studentEnrollments)
+    .set({ status: input.status, updatedAt: new Date() })
+    .where(
+      and(
+        inArray(studentEnrollments.id, enrollmentIds),
+        isNull(studentEnrollments.deletedAt),
+      ),
+    )
+    .returning({ id: studentEnrollments.id });
+
+  return { updated: rows.length };
+}
+
 export async function deleteEnrollment(id: string) {
   const [row] = await getDb()
     .update(studentEnrollments)
@@ -1252,3 +1390,759 @@ export async function findStudentsByIds(ids: string[]) {
     .where(inArray(students.id, ids));
 }
 
+
+/* -------------------------------------------------------------------------- */
+/* Paginated / filtered lists                                                  */
+/* -------------------------------------------------------------------------- */
+
+export type StatusFilter = "active" | "inactive";
+
+export type AcademicYearListFilters = {
+  q?: string;
+  status?: StatusFilter;
+  sort?: "name" | "startDate" | "isActive";
+  dir?: SortDirection;
+  page?: number;
+  perPage?: number;
+};
+
+export async function listAcademicYearsPaged(
+  filters: AcademicYearListFilters,
+): Promise<Paginated<Awaited<ReturnType<typeof listAcademicYears>>[number]>> {
+  const db = getDb();
+  const perPage = filters.perPage ?? 20;
+  const page = filters.page ?? 1;
+  const pattern = filters.q ? likePattern(filters.q) : undefined;
+
+  const conditions = [
+    isNull(academicYears.deletedAt),
+    pattern ? ilike(academicYears.name, pattern) : undefined,
+    filters.status === "active"
+      ? eq(academicYears.isActive, true)
+      : filters.status === "inactive"
+        ? eq(academicYears.isActive, false)
+        : undefined,
+  ];
+
+  const [totalRow] = await db
+    .select({ total: count() })
+    .from(academicYears)
+    .where(and(...conditions));
+  const total = Number(totalRow?.total ?? 0);
+  const meta = normalizePagination(total, page, perPage);
+
+  const sort = filters.sort ?? "startDate";
+  const dir = filters.dir ?? (sort === "startDate" ? "desc" : "asc");
+  const sortColumn =
+    sort === "name"
+      ? academicYears.name
+      : sort === "isActive"
+        ? academicYears.isActive
+        : academicYears.startDate;
+
+  const rows = await db
+    .select()
+    .from(academicYears)
+    .where(and(...conditions))
+    .orderBy(
+      dir === "asc" ? asc(sortColumn) : desc(sortColumn),
+      asc(academicYears.name),
+    )
+    .limit(perPage)
+    .offset(meta.offset);
+
+  return paginated(rows, total, meta.page, perPage);
+}
+
+export type SemesterListFilters = {
+  q?: string;
+  academicYearId?: string;
+  status?: StatusFilter;
+  sort?: "name" | "academicYear" | "startDate" | "isActive";
+  dir?: SortDirection;
+  page?: number;
+  perPage?: number;
+};
+
+export async function listSemestersPaged(
+  filters: SemesterListFilters,
+): Promise<Paginated<Awaited<ReturnType<typeof listSemesters>>[number]>> {
+  const db = getDb();
+  const perPage = filters.perPage ?? 20;
+  const page = filters.page ?? 1;
+  const pattern = filters.q ? likePattern(filters.q) : undefined;
+
+  const conditions = [
+    isNull(semesters.deletedAt),
+    isNull(academicYears.deletedAt),
+    pattern
+      ? or(
+          ilike(academicYears.name, pattern),
+          sql`${semesters.name}::text ilike ${pattern}`,
+        )
+      : undefined,
+    filters.academicYearId
+      ? eq(semesters.academicYearId, filters.academicYearId)
+      : undefined,
+    filters.status === "active"
+      ? eq(semesters.isActive, true)
+      : filters.status === "inactive"
+        ? eq(semesters.isActive, false)
+        : undefined,
+  ];
+
+  const [totalRow] = await db
+    .select({ total: count() })
+    .from(semesters)
+    .innerJoin(academicYears, eq(semesters.academicYearId, academicYears.id))
+    .where(and(...conditions));
+  const total = Number(totalRow?.total ?? 0);
+  const meta = normalizePagination(total, page, perPage);
+
+  const sort = filters.sort ?? "academicYear";
+  const dir = filters.dir ?? (sort === "academicYear" ? "desc" : "asc");
+  const sortColumn =
+    sort === "name"
+      ? semesters.name
+      : sort === "startDate"
+        ? semesters.startDate
+        : sort === "isActive"
+          ? semesters.isActive
+          : academicYears.startDate;
+
+  const rows = await db
+    .select({
+      id: semesters.id,
+      name: semesters.name,
+      startDate: semesters.startDate,
+      endDate: semesters.endDate,
+      isActive: semesters.isActive,
+      academicYearId: academicYears.id,
+      academicYearName: academicYears.name,
+      academicYearActive: academicYears.isActive,
+    })
+    .from(semesters)
+    .innerJoin(academicYears, eq(semesters.academicYearId, academicYears.id))
+    .where(and(...conditions))
+    .orderBy(
+      dir === "asc" ? asc(sortColumn) : desc(sortColumn),
+      asc(semesters.name),
+    )
+    .limit(perPage)
+    .offset(meta.offset);
+
+  return paginated(rows, total, meta.page, perPage);
+}
+
+export type DepartmentListFilters = {
+  q?: string;
+  status?: StatusFilter;
+  sort?: "code" | "name" | "isActive";
+  dir?: SortDirection;
+  page?: number;
+  perPage?: number;
+};
+
+export async function listDepartmentsPaged(
+  filters: DepartmentListFilters,
+): Promise<Paginated<Awaited<ReturnType<typeof listDepartments>>[number]>> {
+  const db = getDb();
+  const perPage = filters.perPage ?? 20;
+  const page = filters.page ?? 1;
+  const pattern = filters.q ? likePattern(filters.q) : undefined;
+
+  const conditions = [
+    isNull(departments.deletedAt),
+    pattern
+      ? or(
+          ilike(departments.code, pattern),
+          ilike(departments.name, pattern),
+        )
+      : undefined,
+    filters.status === "active"
+      ? eq(departments.isActive, true)
+      : filters.status === "inactive"
+        ? eq(departments.isActive, false)
+        : undefined,
+  ];
+
+  const [totalRow] = await db
+    .select({ total: count() })
+    .from(departments)
+    .where(and(...conditions));
+  const total = Number(totalRow?.total ?? 0);
+  const meta = normalizePagination(total, page, perPage);
+
+  const sort = filters.sort ?? "code";
+  const dir = filters.dir ?? "asc";
+  const sortColumn =
+    sort === "name"
+      ? departments.name
+      : sort === "isActive"
+        ? departments.isActive
+        : departments.code;
+
+  const rows = await db
+    .select()
+    .from(departments)
+    .where(and(...conditions))
+    .orderBy(
+      dir === "asc" ? asc(sortColumn) : desc(sortColumn),
+      asc(departments.code),
+    )
+    .limit(perPage)
+    .offset(meta.offset);
+
+  return paginated(rows, total, meta.page, perPage);
+}
+
+export type SubjectListFilters = {
+  q?: string;
+  status?: StatusFilter;
+  sort?: "code" | "name" | "isActive";
+  dir?: SortDirection;
+  page?: number;
+  perPage?: number;
+};
+
+export async function listSubjectsPaged(
+  filters: SubjectListFilters,
+): Promise<Paginated<Awaited<ReturnType<typeof listSubjects>>[number]>> {
+  const db = getDb();
+  const perPage = filters.perPage ?? 20;
+  const page = filters.page ?? 1;
+  const pattern = filters.q ? likePattern(filters.q) : undefined;
+
+  const conditions = [
+    isNull(subjects.deletedAt),
+    pattern
+      ? or(ilike(subjects.code, pattern), ilike(subjects.name, pattern))
+      : undefined,
+    filters.status === "active"
+      ? eq(subjects.isActive, true)
+      : filters.status === "inactive"
+        ? eq(subjects.isActive, false)
+        : undefined,
+  ];
+
+  const [totalRow] = await db
+    .select({ total: count() })
+    .from(subjects)
+    .where(and(...conditions));
+  const total = Number(totalRow?.total ?? 0);
+  const meta = normalizePagination(total, page, perPage);
+
+  const sort = filters.sort ?? "name";
+  const dir = filters.dir ?? "asc";
+  const sortColumn =
+    sort === "code"
+      ? subjects.code
+      : sort === "isActive"
+        ? subjects.isActive
+        : subjects.name;
+
+  const rows = await db
+    .select()
+    .from(subjects)
+    .where(and(...conditions))
+    .orderBy(
+      dir === "asc" ? asc(sortColumn) : desc(sortColumn),
+      asc(subjects.name),
+    )
+    .limit(perPage)
+    .offset(meta.offset);
+
+  return paginated(rows, total, meta.page, perPage);
+}
+
+export type ClassListFilters = {
+  academicYearId?: string;
+  departmentId?: string;
+  gradeLevel?: number;
+  q?: string;
+  status?: StatusFilter;
+  sort?: "class" | "year" | "homeroom" | "studentCount" | "status";
+  dir?: SortDirection;
+  page?: number;
+  perPage?: number;
+};
+
+export async function listClassesPaged(
+  filters: ClassListFilters,
+): Promise<Paginated<Awaited<ReturnType<typeof listClasses>>[number]>> {
+  const db = getDb();
+  const perPage = filters.perPage ?? 20;
+  const page = filters.page ?? 1;
+  const pattern = filters.q ? likePattern(filters.q) : undefined;
+
+  const conditions = [
+    isNull(classes.deletedAt),
+    isNull(academicYears.deletedAt),
+    isNull(departments.deletedAt),
+    filters.academicYearId
+      ? eq(classes.academicYearId, filters.academicYearId)
+      : undefined,
+    filters.departmentId
+      ? eq(classes.departmentId, filters.departmentId)
+      : undefined,
+    filters.gradeLevel ? eq(classes.gradeLevel, filters.gradeLevel) : undefined,
+    filters.status === "active"
+      ? eq(classes.isActive, true)
+      : filters.status === "inactive"
+        ? eq(classes.isActive, false)
+        : undefined,
+    pattern
+      ? or(
+          ilike(departments.code, pattern),
+          ilike(departments.name, pattern),
+          ilike(classes.section, pattern),
+          ilike(users.name, pattern),
+          sql`${classes.gradeLevel}::text ilike ${pattern}`,
+        )
+      : undefined,
+  ];
+
+  const [totalRow] = await db
+    .select({ total: count(classes.id) })
+    .from(classes)
+    .innerJoin(academicYears, eq(classes.academicYearId, academicYears.id))
+    .innerJoin(departments, eq(classes.departmentId, departments.id))
+    .leftJoin(users, eq(classes.homeroomTeacherId, users.id))
+    .where(and(...conditions));
+  const total = Number(totalRow?.total ?? 0);
+  const meta = normalizePagination(total, page, perPage);
+
+  const sort = filters.sort ?? "class";
+  const dir = filters.dir ?? "asc";
+  const studentCountExpr = sql<number>`count(${studentEnrollments.id})`;
+  const tieBreakers = [asc(classes.gradeLevel), asc(classes.section)];
+  const primary =
+    sort === "year"
+      ? dir === "asc"
+        ? asc(academicYears.startDate)
+        : desc(academicYears.startDate)
+      : sort === "homeroom"
+        ? dir === "asc"
+          ? asc(users.name)
+          : desc(users.name)
+        : sort === "studentCount"
+          ? dir === "asc"
+            ? asc(studentCountExpr)
+            : desc(studentCountExpr)
+          : sort === "status"
+            ? dir === "asc"
+              ? asc(classes.isActive)
+              : desc(classes.isActive)
+            : dir === "asc"
+              ? asc(classes.gradeLevel)
+              : desc(classes.gradeLevel);
+
+  const rows = await db
+    .select({
+      id: classes.id,
+      academicYearId: classes.academicYearId,
+      academicYearName: academicYears.name,
+      departmentId: classes.departmentId,
+      departmentCode: departments.code,
+      departmentName: departments.name,
+      gradeLevel: classes.gradeLevel,
+      section: classes.section,
+      homeroomTeacherId: classes.homeroomTeacherId,
+      homeroomTeacherName: users.name,
+      isActive: classes.isActive,
+      studentCount: studentCountExpr,
+    })
+    .from(classes)
+    .innerJoin(academicYears, eq(classes.academicYearId, academicYears.id))
+    .innerJoin(departments, eq(classes.departmentId, departments.id))
+    .leftJoin(users, eq(classes.homeroomTeacherId, users.id))
+    .leftJoin(
+      studentEnrollments,
+      and(
+        eq(studentEnrollments.classId, classes.id),
+        eq(studentEnrollments.academicYearId, classes.academicYearId),
+        eq(studentEnrollments.status, "ACTIVE"),
+        isNull(studentEnrollments.deletedAt),
+      ),
+    )
+    .where(and(...conditions))
+    .groupBy(
+      classes.id,
+      academicYears.name,
+      academicYears.startDate,
+      departments.code,
+      departments.name,
+      users.name,
+    )
+    .orderBy(primary, ...tieBreakers)
+    .limit(perPage)
+    .offset(meta.offset);
+
+  return paginated(
+    rows.map((row) => ({ ...row, studentCount: Number(row.studentCount) })),
+    total,
+    meta.page,
+    perPage,
+  );
+}
+
+export type TeacherListFilters = {
+  q?: string;
+  status?: StatusFilter;
+  subjectId?: string;
+  sort?: "name" | "email" | "nip" | "isActive";
+  dir?: SortDirection;
+  page?: number;
+  perPage?: number;
+};
+
+export async function listTeachersPaged(
+  filters: TeacherListFilters,
+): Promise<Paginated<Awaited<ReturnType<typeof listTeachers>>[number]>> {
+  const db = getDb();
+  const perPage = filters.perPage ?? 20;
+  const page = filters.page ?? 1;
+  const pattern = filters.q ? likePattern(filters.q) : undefined;
+
+  const conditions = [
+    eq(userRoles.role, "GURU"),
+    isNull(users.deletedAt),
+    pattern
+      ? or(
+          ilike(users.name, pattern),
+          ilike(users.email, pattern),
+          ilike(teacherProfiles.nip, pattern),
+        )
+      : undefined,
+    filters.status === "active"
+      ? eq(users.isActive, true)
+      : filters.status === "inactive"
+        ? eq(users.isActive, false)
+        : undefined,
+    filters.subjectId
+      ? sql`exists (select 1 from ${teacherSubjects} where ${teacherSubjects.teacherId} = ${users.id} and ${teacherSubjects.subjectId} = ${filters.subjectId})`
+      : undefined,
+  ];
+
+  const [totalRow] = await db
+    .select({ total: count(users.id) })
+    .from(users)
+    .innerJoin(userRoles, eq(userRoles.userId, users.id))
+    .leftJoin(teacherProfiles, eq(teacherProfiles.userId, users.id))
+    .where(and(...conditions));
+  const total = Number(totalRow?.total ?? 0);
+  const meta = normalizePagination(total, page, perPage);
+
+  const sort = filters.sort ?? "name";
+  const dir = filters.dir ?? "asc";
+  const sortColumn =
+    sort === "email"
+      ? users.email
+      : sort === "nip"
+        ? teacherProfiles.nip
+        : sort === "isActive"
+          ? users.isActive
+          : users.name;
+
+  const rows = await db
+    .select({
+      id: users.id,
+      name: users.name,
+      email: users.email,
+      isActive: users.isActive,
+      nip: teacherProfiles.nip,
+      expertiseNote: teacherProfiles.expertiseNote,
+      createdAt: users.createdAt,
+    })
+    .from(users)
+    .innerJoin(userRoles, eq(userRoles.userId, users.id))
+    .leftJoin(teacherProfiles, eq(teacherProfiles.userId, users.id))
+    .where(and(...conditions))
+    .orderBy(
+      dir === "asc" ? asc(sortColumn) : desc(sortColumn),
+      asc(users.name),
+    )
+    .limit(perPage)
+    .offset(meta.offset);
+
+  return paginated(rows, total, meta.page, perPage);
+}
+
+export type StudentListFilters = {
+  academicYearId?: string | null;
+  q?: string;
+  gender?: "L" | "P";
+  status?: StatusFilter;
+  classId?: string;
+  enrollmentStatus?: EnrollmentStatus;
+  sort?: "name" | "nisn" | "class" | "gender" | "isActive";
+  dir?: SortDirection;
+  page?: number;
+  perPage?: number;
+};
+
+export async function listStudentsPaged(
+  filters: StudentListFilters,
+): Promise<Paginated<Awaited<ReturnType<typeof listStudents>>[number]>> {
+  const db = getDb();
+  const perPage = filters.perPage ?? 20;
+  const page = filters.page ?? 1;
+  const pattern = filters.q ? likePattern(filters.q) : undefined;
+
+  const enrollmentJoin = filters.academicYearId
+    ? and(
+        eq(studentEnrollments.studentId, students.id),
+        eq(studentEnrollments.academicYearId, filters.academicYearId),
+        isNull(studentEnrollments.deletedAt),
+      )
+    : sql`false`;
+
+  const conditions = [
+    isNull(students.deletedAt),
+    filters.gender ? eq(students.gender, filters.gender) : undefined,
+    filters.status === "active"
+      ? eq(students.isActive, true)
+      : filters.status === "inactive"
+        ? eq(students.isActive, false)
+        : undefined,
+    pattern
+      ? or(ilike(students.name, pattern), ilike(students.nisn, pattern))
+      : undefined,
+    filters.classId === "none"
+      ? isNull(classes.id)
+      : filters.classId
+        ? eq(classes.id, filters.classId)
+        : undefined,
+    filters.enrollmentStatus
+      ? eq(studentEnrollments.status, filters.enrollmentStatus)
+      : undefined,
+  ];
+
+  const [totalRow] = await db
+    .select({ total: count(students.id) })
+    .from(students)
+    .leftJoin(studentEnrollments, enrollmentJoin)
+    .leftJoin(classes, eq(studentEnrollments.classId, classes.id))
+    .leftJoin(departments, eq(classes.departmentId, departments.id))
+    .where(and(...conditions));
+  const total = Number(totalRow?.total ?? 0);
+  const meta = normalizePagination(total, page, perPage);
+
+  const sort = filters.sort ?? "name";
+  const dir = filters.dir ?? "asc";
+  const sortColumn =
+    sort === "nisn"
+      ? students.nisn
+      : sort === "gender"
+        ? students.gender
+        : sort === "isActive"
+          ? students.isActive
+          : sort === "class"
+            ? classes.gradeLevel
+            : students.name;
+
+  const rows = await db
+    .select({
+      id: students.id,
+      nisn: students.nisn,
+      name: students.name,
+      gender: students.gender,
+      birthDate: students.birthDate,
+      isActive: students.isActive,
+      classId: classes.id,
+      gradeLevel: classes.gradeLevel,
+      section: classes.section,
+      departmentCode: departments.code,
+      enrollmentStatus: studentEnrollments.status,
+    })
+    .from(students)
+    .leftJoin(studentEnrollments, enrollmentJoin)
+    .leftJoin(classes, eq(studentEnrollments.classId, classes.id))
+    .leftJoin(departments, eq(classes.departmentId, departments.id))
+    .where(and(...conditions))
+    .orderBy(
+      dir === "asc" ? asc(sortColumn) : desc(sortColumn),
+      asc(classes.section),
+      asc(students.name),
+    )
+    .limit(perPage)
+    .offset(meta.offset);
+
+  return paginated(
+    rows.map((row) => ({
+      ...row,
+      className:
+        row.gradeLevel != null
+          ? `${row.gradeLevel} ${row.departmentCode ?? ""} ${row.section ?? ""}`.trim()
+          : null,
+    })),
+    total,
+    meta.page,
+    perPage,
+  );
+}
+
+export type EnrollmentListFilters = {
+  academicYearId?: string;
+  q?: string;
+  classId?: string;
+  status?: EnrollmentStatus;
+  sort?: "student" | "class" | "status";
+  dir?: SortDirection;
+  page?: number;
+  perPage?: number;
+};
+
+export async function listEnrollmentsPaged(
+  filters: EnrollmentListFilters,
+): Promise<Paginated<Awaited<ReturnType<typeof listEnrollments>>[number]>> {
+  const db = getDb();
+  const perPage = filters.perPage ?? 20;
+  const page = filters.page ?? 1;
+  const pattern = filters.q ? likePattern(filters.q) : undefined;
+
+  const conditions = [
+    isNull(studentEnrollments.deletedAt),
+    filters.academicYearId
+      ? eq(studentEnrollments.academicYearId, filters.academicYearId)
+      : undefined,
+    filters.classId ? eq(studentEnrollments.classId, filters.classId) : undefined,
+    filters.status ? eq(studentEnrollments.status, filters.status) : undefined,
+    pattern
+      ? or(ilike(students.name, pattern), ilike(students.nisn, pattern))
+      : undefined,
+  ];
+
+  const [totalRow] = await db
+    .select({ total: count(studentEnrollments.id) })
+    .from(studentEnrollments)
+    .innerJoin(students, eq(studentEnrollments.studentId, students.id))
+    .innerJoin(classes, eq(studentEnrollments.classId, classes.id))
+    .innerJoin(departments, eq(classes.departmentId, departments.id))
+    .innerJoin(
+      academicYears,
+      eq(studentEnrollments.academicYearId, academicYears.id),
+    )
+    .where(and(...conditions));
+  const total = Number(totalRow?.total ?? 0);
+  const meta = normalizePagination(total, page, perPage);
+
+  const sort = filters.sort ?? "student";
+  const dir = filters.dir ?? "asc";
+  const sortColumn =
+    sort === "class"
+      ? classes.gradeLevel
+      : sort === "status"
+        ? studentEnrollments.status
+        : students.name;
+
+  const rows = await db
+    .select({
+      id: studentEnrollments.id,
+      studentId: students.id,
+      studentName: students.name,
+      nisn: students.nisn,
+      classId: classes.id,
+      gradeLevel: classes.gradeLevel,
+      section: classes.section,
+      departmentCode: departments.code,
+      academicYearId: academicYears.id,
+      academicYearName: academicYears.name,
+      status: studentEnrollments.status,
+    })
+    .from(studentEnrollments)
+    .innerJoin(students, eq(studentEnrollments.studentId, students.id))
+    .innerJoin(classes, eq(studentEnrollments.classId, classes.id))
+    .innerJoin(departments, eq(classes.departmentId, departments.id))
+    .innerJoin(
+      academicYears,
+      eq(studentEnrollments.academicYearId, academicYears.id),
+    )
+    .where(and(...conditions))
+    .orderBy(
+      dir === "asc" ? asc(sortColumn) : desc(sortColumn),
+      asc(classes.section),
+      asc(students.name),
+    )
+    .limit(perPage)
+    .offset(meta.offset);
+
+  return paginated(rows, total, meta.page, perPage);
+}
+
+export type TeacherSubjectListFilters = {
+  q?: string;
+  teacherId?: string;
+  subjectId?: string;
+  sort?: "teacher" | "subject";
+  dir?: SortDirection;
+  page?: number;
+  perPage?: number;
+};
+
+export async function listTeacherSubjectsPaged(
+  filters: TeacherSubjectListFilters,
+): Promise<
+  Paginated<
+    Awaited<ReturnType<typeof listTeacherSubjects>>[number] & {
+      teacherName: string;
+      subjectName: string;
+    }
+  >
+> {
+  const db = getDb();
+  const perPage = filters.perPage ?? 20;
+  const page = filters.page ?? 1;
+  const pattern = filters.q ? likePattern(filters.q) : undefined;
+
+  const conditions = [
+    isNull(users.deletedAt),
+    filters.teacherId
+      ? eq(teacherSubjects.teacherId, filters.teacherId)
+      : undefined,
+    filters.subjectId
+      ? eq(teacherSubjects.subjectId, filters.subjectId)
+      : undefined,
+    pattern
+      ? or(
+          ilike(users.name, pattern),
+          ilike(subjects.code, pattern),
+          ilike(subjects.name, pattern),
+        )
+      : undefined,
+  ];
+
+  const [totalRow] = await db
+    .select({ total: count() })
+    .from(teacherSubjects)
+    .innerJoin(users, eq(teacherSubjects.teacherId, users.id))
+    .innerJoin(subjects, eq(teacherSubjects.subjectId, subjects.id))
+    .where(and(...conditions));
+  const total = Number(totalRow?.total ?? 0);
+  const meta = normalizePagination(total, page, perPage);
+
+  const sort = filters.sort ?? "teacher";
+  const dir = filters.dir ?? "asc";
+  const sortColumn = sort === "subject" ? subjects.name : users.name;
+
+  const rows = await db
+    .select({
+      teacherId: teacherSubjects.teacherId,
+      teacherName: users.name,
+      subjectId: teacherSubjects.subjectId,
+      subjectCode: subjects.code,
+      subjectName: subjects.name,
+    })
+    .from(teacherSubjects)
+    .innerJoin(users, eq(teacherSubjects.teacherId, users.id))
+    .innerJoin(subjects, eq(teacherSubjects.subjectId, subjects.id))
+    .where(and(...conditions))
+    .orderBy(
+      dir === "asc" ? asc(sortColumn) : desc(sortColumn),
+      asc(subjects.name),
+    )
+    .limit(perPage)
+    .offset(meta.offset);
+
+  return paginated(rows, total, meta.page, perPage);
+}

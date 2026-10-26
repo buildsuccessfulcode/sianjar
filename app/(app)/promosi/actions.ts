@@ -9,6 +9,7 @@ import {
 } from "@/data-access/promotions";
 import { assertPermission } from "@/lib/dal";
 import { errorMessage } from "@/lib/errors";
+import { redirectWithFlash, resolveReturnTo } from "@/lib/redirect";
 import { promotionSchema } from "@/lib/validators/schedule";
 import type { ActionState } from "@/lib/validators/common";
 
@@ -57,9 +58,12 @@ export async function runPromotion(
   }
 
   revalidate();
-  redirect(
-    `${PATH}?batch=${batchId}&success=${encodeURIComponent("Promosi berhasil dijalankan.")}`,
-  );
+  const url = new URL(resolveReturnTo(formData, PATH), "http://localhost");
+  url.searchParams.set("batch", batchId);
+  url.searchParams.delete("success");
+  url.searchParams.delete("error");
+  url.searchParams.set("success", "Promosi berhasil dijalankan.");
+  redirect(`${url.pathname}${url.search}`);
 }
 
 export async function cancelBatch(formData: FormData) {
@@ -67,10 +71,10 @@ export async function cancelBatch(formData: FormData) {
     const user = await assertPermission("cancel:promotion_batch");
     await cancelPromotionBatch(String(formData.get("id")), user.id);
   } catch (error) {
-    redirect(`${PATH}?error=${encodeURIComponent(errorMessage(error))}`);
+    redirect(redirectWithFlash(formData, PATH, "error", errorMessage(error)));
   }
   revalidate();
   redirect(
-    `${PATH}?success=${encodeURIComponent("Batch promosi dibatalkan.")}`,
+    redirectWithFlash(formData, PATH, "success", "Batch promosi dibatalkan."),
   );
 }

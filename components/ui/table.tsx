@@ -1,4 +1,9 @@
-import type { HTMLAttributes, TdHTMLAttributes, ThHTMLAttributes } from "react";
+import type {
+  HTMLAttributes,
+  ReactNode,
+  TdHTMLAttributes,
+  ThHTMLAttributes,
+} from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -54,6 +59,25 @@ export function TableCell({
       className={cn("px-5 py-4 align-middle text-slate-600", className)}
       {...props}
     />
+  );
+}
+
+export function TableGroupRow({
+  colSpan,
+  children,
+}: {
+  colSpan: number;
+  children: ReactNode;
+}) {
+  return (
+    <tr className="bg-slate-50/80">
+      <td
+        colSpan={colSpan}
+        className="px-5 py-2.5 text-xs font-semibold uppercase tracking-wide text-slate-500"
+      >
+        {children}
+      </td>
+    </tr>
   );
 }
 

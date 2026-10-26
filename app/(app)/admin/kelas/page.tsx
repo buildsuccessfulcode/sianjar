@@ -1,11 +1,16 @@
-import type { Metadata } from "next";
+﻿import type { Metadata } from "next";
 import { Pencil, Plus } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { ConfirmSubmit } from "@/components/ui/confirm-submit";
+import { FilterBar } from "@/components/ui/filter-bar";
 import { Field, Input, Select } from "@/components/ui/form";
+import { ListQueryHidden } from "@/components/ui/list-query-hidden";
 import { ModalForm } from "@/components/ui/modal-form";
 import { PageHeader } from "@/components/ui/page-header";
+import { Pagination } from "@/components/ui/pagination";
+import { SearchField } from "@/components/ui/search-field";
+import { SortableHead } from "@/components/ui/sortable-head";
 import {
   Table,
   TableBody,
@@ -17,18 +22,25 @@ import {
 import {
   getActiveAcademicYear,
   listAcademicYears,
-  listClasses,
+  listClassesPaged,
   listDepartments,
   listTeacherOptions,
 } from "@/data-access/master";
 import { requirePagePermission } from "@/lib/dal";
+import {
+  buildListHref,
+  parsePage,
+  parsePerPage,
+  resolveDirection,
+  resolveSort,
+} from "@/lib/pagination";
 import { classLabel } from "@/lib/utils";
 import { deleteClass, saveClass } from "./actions";
 
 export const metadata: Metadata = { title: "Kelas" };
 export const dynamic = "force-dynamic";
 
-type ClassRow = Awaited<ReturnType<typeof listClasses>>[number];
+type ClassRow = Awaited<ReturnType<typeof listClassesPaged>>["rows"][number];
 type YearRow = Awaited<ReturnType<typeof listAcademicYears>>[number];
 type DepartmentRow = Awaited<ReturnType<typeof listDepartments>>[number];
 type TeacherRow = Awaited<ReturnType<typeof listTeacherOptions>>[number];
@@ -107,13 +119,12 @@ function ClassFields({
             ))}
           </Select>
         </Field>
-        <Field label="Rombel" htmlFor="section" required>
+        <Field label="Rombel (opsional)" htmlFor="section">
           <Input
             id="section"
             name="section"
-            placeholder="1"
+            placeholder="Opsional"
             defaultValue={row?.section}
-            required
           />
         </Field>
       </div>
@@ -135,14 +146,57 @@ function ClassFields({
   );
 }
 
-export default async function ClassPage() {
+const sortOptions = [
+  "class",
+  "year",
+  "homeroom",
+  "studentCount",
+  "status",
+] as const;
+const BASE_PATH = "/admin/kelas";
+
+export default async function ClassPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   await requirePagePermission("manage:master_data");
-  const [years, departments, teachers, activeYear, classes] = await Promise.all([
+  const params = await searchParams;
+
+  const q = typeof params.q === "string" ? params.q : undefined;
+  const academicYearId =
+    typeof params.year === "string" ? params.year : undefined;
+  const departmentId =
+    typeof params.department === "string" ? params.department : undefined;
+  const gradeLevel = Number(params.grade);
+  const status: "active" | "inactive" | undefined =
+    params.status === "active" || params.status === "inactive"
+      ? params.status
+      : undefined;
+  const sort = resolveSort(params.sort, sortOptions, "class");
+  const dir = resolveDirection(params.dir, "asc");
+  const page = parsePage(params.page);
+  const perPage = parsePerPage(params.perPage);
+  const returnTo = buildListHref(BASE_PATH, params);
+
+  const [years, departments, teachers, activeYear, result] = await Promise.all([
     listAcademicYears(),
     listDepartments(),
     listTeacherOptions(),
     getActiveAcademicYear(),
-    listClasses(),
+    listClassesPaged({
+      academicYearId,
+      departmentId,
+      gradeLevel: [7, 8, 9, 10, 11, 12].includes(gradeLevel)
+        ? gradeLevel
+        : undefined,
+      q,
+      status,
+      sort,
+      dir,
+      page,
+      perPage,
+    }),
   ]);
 
   return (
@@ -153,6 +207,7 @@ export default async function ClassPage() {
         actions={
           <ModalForm
             action={saveClass}
+            returnTo={returnTo}
             triggerLabel="Tambah Kelas"
             triggerIcon={<Plus className="h-4 w-4" />}
             title="Tambah Kelas"
@@ -169,22 +224,120 @@ export default async function ClassPage() {
         }
       />
 
+      <FilterBar
+        resetHref={BASE_PATH}
+        description="Saring kelas per tahun ajaran, jurusan, tingkat, dan status. Klik judul kolom untuk mengurutkan."
+        formClassName="sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5"
+      >
+        <ListQueryHidden perPage={perPage} sort={sort} dir={dir} />
+        <SearchField
+          defaultValue={q}
+          placeholder="Cari kelas, jurusan, atau wali..."
+        />
+        <Field label="Tahun Ajaran" htmlFor="year">
+          <Select id="year" name="year" defaultValue={academicYearId ?? ""}>
+            <option value="">Semua tahun</option>
+            {years.map((year) => (
+              <option key={year.id} value={year.id}>
+                {year.name}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="Jurusan" htmlFor="department">
+          <Select
+            id="department"
+            name="department"
+            defaultValue={departmentId ?? ""}
+          >
+            <option value="">Semua jurusan</option>
+            {departments.map((department) => (
+              <option key={department.id} value={department.id}>
+                {department.code} — {department.name}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="Tingkat" htmlFor="grade">
+          <Select
+            id="grade"
+            name="grade"
+            defaultValue={
+              [7, 8, 9, 10, 11, 12].includes(gradeLevel)
+                ? String(gradeLevel)
+                : ""
+            }
+          >
+            <option value="">Semua tingkat</option>
+            {[7, 8, 9, 10, 11, 12].map((grade) => (
+              <option key={grade} value={grade}>
+                {grade}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="Status" htmlFor="status">
+          <Select id="status" name="status" defaultValue={status ?? ""}>
+            <option value="">Semua status</option>
+            <option value="active">Aktif</option>
+            <option value="inactive">Nonaktif</option>
+          </Select>
+        </Field>
+      </FilterBar>
+
       <div className="space-y-3">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+        <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-500">
           Daftar Kelas
+          <Badge variant="neutral">{result.total} data</Badge>
         </h2>
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Kelas</TableHead>
-              <TableHead>Tahun</TableHead>
-              <TableHead>Wali Kelas</TableHead>
-              <TableHead>Siswa</TableHead>
+              <SortableHead
+                label="Kelas"
+                column="class"
+                currentSort={sort}
+                currentDir={dir}
+                basePath={BASE_PATH}
+                searchParams={params}
+              />
+              <SortableHead
+                label="Tahun"
+                column="year"
+                currentSort={sort}
+                currentDir={dir}
+                basePath={BASE_PATH}
+                searchParams={params}
+              />
+              <SortableHead
+                label="Wali Kelas"
+                column="homeroom"
+                currentSort={sort}
+                currentDir={dir}
+                basePath={BASE_PATH}
+                searchParams={params}
+              />
+              <SortableHead
+                label="Siswa"
+                column="studentCount"
+                currentSort={sort}
+                currentDir={dir}
+                basePath={BASE_PATH}
+                searchParams={params}
+              />
+              <SortableHead
+                label="Status"
+                column="status"
+                currentSort={sort}
+                currentDir={dir}
+                basePath={BASE_PATH}
+                searchParams={params}
+              />
               <TableHead className="text-right">Aksi</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {classes.map((row) => (
+            {result.rows.map((row) => (
               <TableRow key={row.id}>
                 <TableCell className="font-medium text-slate-900">
                   {classLabel({
@@ -201,9 +354,15 @@ export default async function ClassPage() {
                   </Badge>
                 </TableCell>
                 <TableCell>
+                  <Badge variant={row.isActive ? "success" : "neutral"}>
+                    {row.isActive ? "Aktif" : "Nonaktif"}
+                  </Badge>
+                </TableCell>
+                <TableCell>
                   <div className="flex justify-end gap-2">
                     <ModalForm
                       action={saveClass}
+                      returnTo={returnTo}
                       triggerLabel="Ubah"
                       triggerIcon={<Pencil className="h-3.5 w-3.5" />}
                       triggerVariant="ghost"
@@ -221,6 +380,7 @@ export default async function ClassPage() {
                     </ModalForm>
                     <form action={deleteClass}>
                       <input type="hidden" name="id" value={row.id} />
+                      <input type="hidden" name="returnTo" value={returnTo} />
                       <ConfirmSubmit
                         variant="ghost"
                         size="sm"
@@ -234,15 +394,25 @@ export default async function ClassPage() {
                 </TableCell>
               </TableRow>
             ))}
-            {classes.length === 0 ? (
+            {result.rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-center text-slate-500">
-                  Belum ada kelas.
+                <TableCell colSpan={6} className="text-center text-slate-500">
+                  Tidak ada kelas pada filter ini.
                 </TableCell>
               </TableRow>
             ) : null}
           </TableBody>
         </Table>
+        <Pagination
+          basePath={BASE_PATH}
+          searchParams={params}
+          page={result.page}
+          perPage={result.perPage}
+          total={result.total}
+          totalPages={result.totalPages}
+          from={result.from}
+          to={result.to}
+        />
       </div>
     </div>
   );

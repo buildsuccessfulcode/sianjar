@@ -54,7 +54,7 @@ export const classSchema = z.object({
   academicYearId: uuidSchema,
   departmentId: uuidSchema,
   gradeLevel: z.coerce.number().int().min(7).max(12),
-  section: z.string().trim().min(1).max(10),
+  section: z.string().trim().max(10),
   homeroomTeacherId: optionalUuid,
 });
 
@@ -89,6 +89,28 @@ export const studentUpdateSchema = studentCreateSchema.extend({
   isActive: checkbox.optional().default(true),
 });
 
+export const studentImportRowSchema = z.object({
+  rowNumber: z.number().int().positive(),
+  nisn: z
+    .string()
+    .trim()
+    .min(1, "NISN wajib diisi.")
+    .max(20, "NISN maksimal 20 karakter."),
+  name: z
+    .string()
+    .trim()
+    .min(1, "Nama wajib diisi.")
+    .max(255, "Nama maksimal 255 karakter."),
+  gender: z.enum(["L", "P"], {
+    message: "Jenis kelamin harus L atau P.",
+  }),
+  birthDate: z
+    .string()
+    .optional()
+    .transform((value) => (value ? value : undefined))
+    .pipe(dateString.optional()),
+});
+
 const enrollmentStatusSchema = z
   .enum(["ACTIVE", "COMPLETED", "GRADUATED", "TRANSFERRED", "DROPPED_OUT"])
   .default("ACTIVE");
@@ -110,7 +132,7 @@ export const enrollmentBulkSchema = z.object({
   studentIds: z
     .array(uuidSchema)
     .min(1, "Pilih minimal satu siswa.")
-    .max(1000, "Maksimal 1000 siswa per batch.")
+    .max(2000, "Maksimal 2000 siswa per batch.")
     .transform((ids) => [...new Set(ids)]),
   classId: uuidSchema,
   academicYearId: uuidSchema,
@@ -121,12 +143,30 @@ export const enrollmentMoveSchema = z.object({
   enrollmentIds: z
     .array(uuidSchema)
     .min(1, "Pilih minimal satu enrollment.")
-    .max(1000, "Maksimal 1000 enrollment per batch.")
+    .max(2000, "Maksimal 2000 enrollment per batch.")
     .transform((ids) => [...new Set(ids)]),
   targetClassId: uuidSchema,
+});
+
+export const enrollmentBulkStatusSchema = z.object({
+  enrollmentIds: z
+    .array(uuidSchema)
+    .min(1, "Pilih minimal satu enrollment.")
+    .max(2000, "Maksimal 2000 enrollment per batch.")
+    .transform((ids) => [...new Set(ids)]),
+  status: enrollmentStatusSchema,
 });
 
 export const teacherSubjectSchema = z.object({
   teacherId: uuidSchema,
   subjectId: uuidSchema,
+});
+
+export const teacherSubjectBulkSchema = z.object({
+  teacherId: uuidSchema,
+  subjectIds: z
+    .array(uuidSchema)
+    .min(1, "Pilih minimal satu mapel.")
+    .max(50, "Maksimal 50 mapel per batch.")
+    .transform((ids) => [...new Set(ids)]),
 });

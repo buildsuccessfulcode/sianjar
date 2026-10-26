@@ -4,17 +4,22 @@ import {
   and,
   asc,
   count,
+  desc,
   eq,
   gte,
+  ilike,
+  inArray,
   isNull,
   lte,
   ne,
   or,
+  sql,
 } from "drizzle-orm";
 import type { z } from "zod";
 
 import {
   academicYears,
+  classPromotionRules,
   classes,
   departments,
   journals,
@@ -34,17 +39,44 @@ import {
   NotFoundError,
   ValidationError,
 } from "@/lib/errors";
-import type { scheduleSchema } from "@/lib/validators/schedule";
+import type {
+  scheduleCopySchema,
+  scheduleSchema,
+} from "@/lib/validators/schedule";
+import {
+  likePattern,
+  normalizePagination,
+  paginated,
+  type Paginated,
+  type SortDirection,
+} from "@/lib/pagination";
 
 export type ScheduleInput = z.infer<typeof scheduleSchema>;
+export type ScheduleCopyInput = z.infer<typeof scheduleCopySchema>;
+export type ScheduleCopyResult = {
+  timeSlotsCopied: number;
+  schedulesCopied: number;
+  schedulesSkipped: number;
+  notes: string[];
+};
 export type ScheduleFilters = {
   semesterId?: string;
   teacherId?: string;
   classId?: string;
+  subjectId?: string;
   dayOfWeek?: number;
+  q?: string;
+};
+
+export type ScheduleListFilters = ScheduleFilters & {
+  sort?: "day" | "period" | "subject" | "class" | "teacher" | "room";
+  dir?: SortDirection;
+  page?: number;
+  perPage?: number;
 };
 
 export async function listSchedules(filters: ScheduleFilters) {
+  const pattern = filters.q ? likePattern(filters.q) : undefined;
   const conditions = [
     isNull(schedules.deletedAt),
     isNull(semesters.deletedAt),
@@ -52,8 +84,19 @@ export async function listSchedules(filters: ScheduleFilters) {
     filters.semesterId ? eq(schedules.semesterId, filters.semesterId) : undefined,
     filters.teacherId ? eq(schedules.teacherId, filters.teacherId) : undefined,
     filters.classId ? eq(schedules.classId, filters.classId) : undefined,
+    filters.subjectId ? eq(schedules.subjectId, filters.subjectId) : undefined,
     filters.dayOfWeek
       ? eq(schedules.dayOfWeek, filters.dayOfWeek)
+      : undefined,
+    pattern
+      ? or(
+          ilike(users.name, pattern),
+          ilike(subjects.name, pattern),
+          ilike(departments.code, pattern),
+          ilike(classes.section, pattern),
+          ilike(schedules.room, pattern),
+          sql`${classes.gradeLevel}::text ilike ${pattern}`,
+        )
       : undefined,
   ];
 
@@ -127,6 +170,464 @@ export async function getScheduleById(id: string) {
     .where(and(eq(schedules.id, id), isNull(schedules.deletedAt)))
     .limit(1);
   return rows[0] ?? null;
+}
+
+export async function copyScheduleData(
+  input: ScheduleCopyInput,
+  actorId: string,
+): Promise<ScheduleCopyResult> {
+  const db = getDbPool();
+  return db.transaction(async (tx) => {
+    const semesterRows = await tx
+      .select({
+        id: semesters.id,
+        name: semesters.name,
+        startDate: semesters.startDate,
+        academicYearId: academicYears.id,
+        academicYearName: academicYears.name,
+      })
+      .from(semesters)
+      .innerJoin(academicYears, eq(semesters.academicYearId, academicYears.id))
+      .where(
+        and(
+          inArray(semesters.id, [
+            input.sourceSemesterId,
+            input.targetSemesterId,
+          ]),
+          isNull(semesters.deletedAt),
+          isNull(academicYears.deletedAt),
+        ),
+      );
+
+    const source = semesterRows.find(
+      (row) => row.id === input.sourceSemesterId,
+    );
+    const target = semesterRows.find(
+      (row) => row.id === input.targetSemesterId,
+    );
+    if (!source || !target) throw new NotFoundError("Semester tidak ditemukan.");
+    if (source.startDate >= target.startDate) {
+      throw new ValidationError(
+        "Semester sumber harus lebih awal dari semester tujuan.",
+      );
+    }
+
+    const notes: string[] = [];
+    const sourceSlots = await tx
+      .select({
+        label: timeSlots.label,
+        kind: timeSlots.kind,
+        periodNumber: timeSlots.periodNumber,
+        startTime: timeSlots.startTime,
+        endTime: timeSlots.endTime,
+      })
+      .from(timeSlots)
+      .where(eq(timeSlots.semesterId, source.id))
+      .orderBy(asc(timeSlots.startTime), asc(timeSlots.periodNumber));
+    let targetSlots = await tx
+      .select({
+        label: timeSlots.label,
+        kind: timeSlots.kind,
+        periodNumber: timeSlots.periodNumber,
+        startTime: timeSlots.startTime,
+        endTime: timeSlots.endTime,
+      })
+      .from(timeSlots)
+      .where(eq(timeSlots.semesterId, target.id));
+
+    let timeSlotsCopied = 0;
+    if (input.copyTimeSlots) {
+      if (sourceSlots.length === 0) {
+        notes.push("Semester sumber belum memiliki susunan jam.");
+      } else if (targetSlots.length > 0) {
+        notes.push(
+          "Susunan jam semester tujuan sudah ada sehingga tidak disalin.",
+        );
+      } else {
+        await tx.insert(timeSlots).values(
+          sourceSlots.map((slot) => ({
+            semesterId: target.id,
+            label: slot.label,
+            kind: slot.kind,
+            periodNumber: slot.periodNumber,
+            startTime: slot.startTime,
+            endTime: slot.endTime,
+          })),
+        );
+        timeSlotsCopied = sourceSlots.length;
+        targetSlots = sourceSlots;
+      }
+    }
+
+    let schedulesCopied = 0;
+    let schedulesSkipped = 0;
+
+    if (input.copySchedules) {
+      const sourceRows = await tx
+        .select({
+          teacherId: schedules.teacherId,
+          subjectId: schedules.subjectId,
+          classId: schedules.classId,
+          departmentId: classes.departmentId,
+          departmentCode: departments.code,
+          gradeLevel: classes.gradeLevel,
+          section: classes.section,
+          dayOfWeek: schedules.dayOfWeek,
+          periodStart: schedules.periodStart,
+          periodEnd: schedules.periodEnd,
+          room: schedules.room,
+        })
+        .from(schedules)
+        .innerJoin(users, eq(schedules.teacherId, users.id))
+        .innerJoin(subjects, eq(schedules.subjectId, subjects.id))
+        .innerJoin(classes, eq(schedules.classId, classes.id))
+        .innerJoin(departments, eq(classes.departmentId, departments.id))
+        .where(
+          and(
+            eq(schedules.semesterId, source.id),
+            eq(schedules.isActive, true),
+            isNull(schedules.deletedAt),
+            eq(users.isActive, true),
+            isNull(users.deletedAt),
+            eq(subjects.isActive, true),
+            isNull(subjects.deletedAt),
+          ),
+        )
+        .orderBy(
+          asc(schedules.dayOfWeek),
+          asc(schedules.periodStart),
+          asc(classes.gradeLevel),
+          asc(classes.section),
+        );
+
+      if (sourceRows.length === 0) {
+        notes.push("Semester sumber belum memiliki jadwal.");
+      } else {
+        const sourceClassIds = [...new Set(sourceRows.map((row) => row.classId))];
+        const sourceClasses = new Map(
+          sourceRows.map((row) => [
+            row.classId,
+            {
+              departmentId: row.departmentId,
+              departmentCode: row.departmentCode,
+              gradeLevel: row.gradeLevel,
+              section: row.section,
+            },
+          ]),
+        );
+        const targetClasses = await tx
+          .select({
+            id: classes.id,
+            departmentId: classes.departmentId,
+            gradeLevel: classes.gradeLevel,
+            section: classes.section,
+          })
+          .from(classes)
+          .innerJoin(departments, eq(classes.departmentId, departments.id))
+          .where(
+            and(
+              eq(classes.academicYearId, target.academicYearId),
+              eq(classes.isActive, true),
+              isNull(classes.deletedAt),
+              isNull(departments.deletedAt),
+            ),
+          );
+
+        const sameYear = source.academicYearId === target.academicYearId;
+        const rules = sameYear
+          ? []
+          : await tx
+              .select({
+                fromClassId: classPromotionRules.fromClassId,
+                toClassId: classPromotionRules.toClassId,
+                action: classPromotionRules.action,
+              })
+              .from(classPromotionRules)
+              .where(
+                and(
+                  eq(
+                    classPromotionRules.academicYearToId,
+                    target.academicYearId,
+                  ),
+                  inArray(classPromotionRules.fromClassId, sourceClassIds),
+                ),
+              );
+        const rulesByClass = new Map(rules.map((rule) => [rule.fromClassId, rule]));
+        const targetClassById = new Map(
+          targetClasses.map((row) => [row.id, row]),
+        );
+        const classMapping = new Map<
+          string,
+          (typeof targetClasses)[number] | null
+        >();
+        const unmappedLabels = new Set<string>();
+
+        for (const sourceClassId of sourceClassIds) {
+          const sourceClass = sourceClasses.get(sourceClassId);
+          if (!sourceClass) continue;
+
+          let targetClass: (typeof targetClasses)[number] | null = null;
+          if (sameYear) {
+            targetClass =
+              targetClasses.find(
+                (row) =>
+                  row.departmentId === sourceClass.departmentId &&
+                  row.gradeLevel === sourceClass.gradeLevel &&
+                  row.section.trim().toLowerCase() ===
+                    sourceClass.section.trim().toLowerCase(),
+              ) ?? null;
+          } else {
+            const rule = rulesByClass.get(sourceClassId);
+            if (rule) {
+              if (rule.action === "PROMOTE" || rule.action === "RETAIN") {
+                targetClass = rule.toClassId
+                  ? (targetClassById.get(rule.toClassId) ?? null)
+                  : null;
+              }
+            } else {
+              const promoted = targetClasses.filter(
+                (row) =>
+                  row.departmentId === sourceClass.departmentId &&
+                  row.gradeLevel === sourceClass.gradeLevel + 1,
+              );
+              targetClass =
+                promoted.find(
+                  (row) =>
+                    row.section.trim().toLowerCase() ===
+                    sourceClass.section.trim().toLowerCase(),
+                ) ??
+                (promoted.length === 1 ? promoted[0] : null);
+            }
+          }
+
+          classMapping.set(sourceClassId, targetClass);
+          if (!targetClass) {
+            unmappedLabels.add(
+              `${sourceClass.gradeLevel} ${sourceClass.departmentCode} ${sourceClass.section}`.trim(),
+            );
+          }
+        }
+
+        if (unmappedLabels.size > 0) {
+          const labels = [...unmappedLabels];
+          notes.push(
+            `Kelas tanpa padanan: ${labels.slice(0, 3).join(", ")}${
+              labels.length > 3 ? `, +${labels.length - 3} lainnya` : ""
+            }.`,
+          );
+        }
+
+        const lessonPeriods = new Set(
+          targetSlots
+            .filter((slot) => slot.kind === "LESSON")
+            .map((slot) => slot.periodNumber)
+            .filter((value): value is number => value !== null),
+        );
+        const validatePeriods = lessonPeriods.size > 0;
+
+        const teacherIds = [...new Set(sourceRows.map((row) => row.teacherId))];
+        const subjectIds = [...new Set(sourceRows.map((row) => row.subjectId))];
+        const teacherMappings = await tx
+          .select({
+            teacherId: teacherSubjects.teacherId,
+            subjectId: teacherSubjects.subjectId,
+          })
+          .from(teacherSubjects)
+          .where(
+            and(
+              inArray(teacherSubjects.teacherId, teacherIds),
+              inArray(teacherSubjects.subjectId, subjectIds),
+            ),
+          );
+        const teacherSubjectKeys = new Set(
+          teacherMappings.map((row) => `${row.teacherId}:${row.subjectId}`),
+        );
+
+        type BusyInterval = {
+          dayOfWeek: number;
+          periodStart: number;
+          periodEnd: number;
+        };
+        const teacherBusy = new Map<string, BusyInterval[]>();
+        const classBusy = new Map<string, BusyInterval[]>();
+        const addBusy = (
+          map: Map<string, BusyInterval[]>,
+          key: string,
+          interval: BusyInterval,
+        ) => {
+          const list = map.get(key);
+          if (list) list.push(interval);
+          else map.set(key, [interval]);
+        };
+        const hasBusy = (
+          map: Map<string, BusyInterval[]>,
+          key: string,
+          periodStart: number,
+          periodEnd: number,
+        ) =>
+          (map.get(key) ?? []).some(
+            (interval) =>
+              interval.periodStart <= periodEnd &&
+              interval.periodEnd >= periodStart,
+          );
+
+        const existingTarget = await tx
+          .select({
+            teacherId: schedules.teacherId,
+            classId: schedules.classId,
+            dayOfWeek: schedules.dayOfWeek,
+            periodStart: schedules.periodStart,
+            periodEnd: schedules.periodEnd,
+            isActive: schedules.isActive,
+            deletedAt: schedules.deletedAt,
+          })
+          .from(schedules)
+          .where(eq(schedules.semesterId, target.id));
+        const occupiedTeacherStarts = new Set<string>();
+        const occupiedClassStarts = new Set<string>();
+        for (const row of existingTarget) {
+          occupiedTeacherStarts.add(
+            `${row.teacherId}:${row.dayOfWeek}:${row.periodStart}`,
+          );
+          occupiedClassStarts.add(
+            `${row.classId}:${row.dayOfWeek}:${row.periodStart}`,
+          );
+          if (!row.isActive || row.deletedAt) continue;
+
+          const interval = {
+            dayOfWeek: row.dayOfWeek,
+            periodStart: row.periodStart,
+            periodEnd: row.periodEnd,
+          };
+          addBusy(
+            teacherBusy,
+            `${row.teacherId}:${row.dayOfWeek}`,
+            interval,
+          );
+          addBusy(classBusy, `${row.classId}:${row.dayOfWeek}`, interval);
+        }
+
+        const skippedReasons = new Set<string>();
+        const toInsert: (typeof schedules.$inferInsert)[] = [];
+
+        for (const row of sourceRows) {
+          const targetClass = classMapping.get(row.classId);
+          if (!targetClass) {
+            schedulesSkipped += 1;
+            continue;
+          }
+          if (
+            validatePeriods &&
+            (!lessonPeriods.has(row.periodStart) ||
+              !lessonPeriods.has(row.periodEnd))
+          ) {
+            schedulesSkipped += 1;
+            skippedReasons.add(
+              "Ada jadwal dengan nomor jam yang tidak tersedia di susunan jam tujuan.",
+            );
+            continue;
+          }
+          if (
+            !teacherSubjectKeys.has(`${row.teacherId}:${row.subjectId}`)
+          ) {
+            schedulesSkipped += 1;
+            skippedReasons.add("Ada guru-mapel yang belum dipetakan.");
+            continue;
+          }
+
+          const teacherKey = `${row.teacherId}:${row.dayOfWeek}`;
+          const teacherStartKey = `${row.teacherId}:${row.dayOfWeek}:${row.periodStart}`;
+          if (occupiedTeacherStarts.has(teacherStartKey)) {
+            schedulesSkipped += 1;
+            skippedReasons.add(
+              "Ada slot mulai guru yang sudah dipakai pada semester tujuan.",
+            );
+            continue;
+          }
+          if (
+            hasBusy(
+              teacherBusy,
+              teacherKey,
+              row.periodStart,
+              row.periodEnd,
+            )
+          ) {
+            schedulesSkipped += 1;
+            skippedReasons.add("Ada jadwal guru yang bentrok.");
+            continue;
+          }
+          const classKey = `${targetClass.id}:${row.dayOfWeek}`;
+          const classStartKey = `${targetClass.id}:${row.dayOfWeek}:${row.periodStart}`;
+          if (occupiedClassStarts.has(classStartKey)) {
+            schedulesSkipped += 1;
+            skippedReasons.add(
+              "Ada slot mulai kelas yang sudah dipakai pada semester tujuan.",
+            );
+            continue;
+          }
+          if (
+            hasBusy(classBusy, classKey, row.periodStart, row.periodEnd)
+          ) {
+            schedulesSkipped += 1;
+            skippedReasons.add("Ada jadwal kelas yang bentrok.");
+            continue;
+          }
+
+          const value = {
+            semesterId: target.id,
+            teacherId: row.teacherId,
+            subjectId: row.subjectId,
+            classId: targetClass.id,
+            dayOfWeek: row.dayOfWeek,
+            periodStart: row.periodStart,
+            periodEnd: row.periodEnd,
+            room: row.room,
+          };
+          toInsert.push(value);
+          const interval = {
+            dayOfWeek: row.dayOfWeek,
+            periodStart: row.periodStart,
+            periodEnd: row.periodEnd,
+          };
+          addBusy(teacherBusy, teacherKey, interval);
+          addBusy(classBusy, classKey, interval);
+          occupiedTeacherStarts.add(teacherStartKey);
+          occupiedClassStarts.add(classStartKey);
+        }
+
+        if (toInsert.length > 0) {
+          await tx.insert(schedules).values(toInsert);
+          schedulesCopied = toInsert.length;
+        }
+        for (const reason of skippedReasons) notes.push(reason);
+      }
+    }
+
+    if (timeSlotsCopied > 0 || schedulesCopied > 0) {
+      await writeAudit(tx, {
+        actorId,
+        action: "schedule.copy",
+        entityType: "semester",
+        entityId: target.id,
+        payload: {
+          sourceSemester: source.name,
+          sourceAcademicYear: source.academicYearName,
+          targetSemester: target.name,
+          targetAcademicYear: target.academicYearName,
+          timeSlotsCopied,
+          schedulesCopied,
+          schedulesSkipped,
+        },
+      });
+    }
+
+    return {
+      timeSlotsCopied,
+      schedulesCopied,
+      schedulesSkipped,
+      notes,
+    };
+  });
 }
 
 async function getSemesterContext(semesterId: string) {
@@ -611,3 +1112,103 @@ export async function getScheduleConflictAlternative(
     .orderBy(asc(schedules.periodStart));
 }
 
+
+export async function listSchedulesPaged(
+  filters: ScheduleListFilters,
+): Promise<Paginated<Awaited<ReturnType<typeof listSchedules>>[number]>> {
+  const db = getDb();
+  const perPage = filters.perPage ?? 20;
+  const page = filters.page ?? 1;
+  const pattern = filters.q ? likePattern(filters.q) : undefined;
+
+  const conditions = [
+    isNull(schedules.deletedAt),
+    isNull(semesters.deletedAt),
+    isNull(academicYears.deletedAt),
+    filters.semesterId ? eq(schedules.semesterId, filters.semesterId) : undefined,
+    filters.teacherId ? eq(schedules.teacherId, filters.teacherId) : undefined,
+    filters.classId ? eq(schedules.classId, filters.classId) : undefined,
+    filters.subjectId ? eq(schedules.subjectId, filters.subjectId) : undefined,
+    filters.dayOfWeek
+      ? eq(schedules.dayOfWeek, filters.dayOfWeek)
+      : undefined,
+    pattern
+      ? or(
+          ilike(users.name, pattern),
+          ilike(subjects.name, pattern),
+          ilike(departments.code, pattern),
+          ilike(classes.section, pattern),
+          ilike(schedules.room, pattern),
+          sql`${classes.gradeLevel}::text ilike ${pattern}`,
+        )
+      : undefined,
+  ];
+
+  const [totalRow] = await db
+    .select({ total: count(schedules.id) })
+    .from(schedules)
+    .innerJoin(semesters, eq(schedules.semesterId, semesters.id))
+    .innerJoin(academicYears, eq(semesters.academicYearId, academicYears.id))
+    .innerJoin(users, eq(schedules.teacherId, users.id))
+    .innerJoin(subjects, eq(schedules.subjectId, subjects.id))
+    .innerJoin(classes, eq(schedules.classId, classes.id))
+    .innerJoin(departments, eq(classes.departmentId, departments.id))
+    .where(and(...conditions));
+  const total = Number(totalRow?.total ?? 0);
+  const meta = normalizePagination(total, page, perPage);
+
+  const sort = filters.sort ?? "day";
+  const dir = filters.dir ?? "asc";
+  const sortColumn =
+    sort === "period"
+      ? schedules.periodStart
+      : sort === "subject"
+        ? subjects.name
+        : sort === "class"
+          ? classes.gradeLevel
+          : sort === "teacher"
+            ? users.name
+            : sort === "room"
+              ? schedules.room
+              : schedules.dayOfWeek;
+
+  const rows = await db
+    .select({
+      id: schedules.id,
+      semesterId: schedules.semesterId,
+      semesterName: semesters.name,
+      academicYearName: academicYears.name,
+      teacherId: schedules.teacherId,
+      teacherName: users.name,
+      subjectId: schedules.subjectId,
+      subjectName: subjects.name,
+      classId: schedules.classId,
+      gradeLevel: classes.gradeLevel,
+      section: classes.section,
+      departmentCode: departments.code,
+      dayOfWeek: schedules.dayOfWeek,
+      periodStart: schedules.periodStart,
+      periodEnd: schedules.periodEnd,
+      room: schedules.room,
+      isActive: schedules.isActive,
+    })
+    .from(schedules)
+    .innerJoin(semesters, eq(schedules.semesterId, semesters.id))
+    .innerJoin(academicYears, eq(semesters.academicYearId, academicYears.id))
+    .innerJoin(users, eq(schedules.teacherId, users.id))
+    .innerJoin(subjects, eq(schedules.subjectId, subjects.id))
+    .innerJoin(classes, eq(schedules.classId, classes.id))
+    .innerJoin(departments, eq(classes.departmentId, departments.id))
+    .where(and(...conditions))
+    .orderBy(
+      dir === "asc" ? asc(sortColumn) : desc(sortColumn),
+      asc(schedules.dayOfWeek),
+      asc(schedules.periodStart),
+      asc(classes.gradeLevel),
+      asc(classes.section),
+    )
+    .limit(perPage)
+    .offset(meta.offset);
+
+  return paginated(rows, total, meta.page, perPage);
+}

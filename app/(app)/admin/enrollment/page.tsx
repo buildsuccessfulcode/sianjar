@@ -1,24 +1,23 @@
-import type { Metadata } from "next";
-import { Filter, Plus, UserPlus, Users } from "lucide-react";
+﻿import type { Metadata } from "next";
+import { Plus, UserPlus, Users } from "lucide-react";
 
 import { BulkEnrollmentForm } from "@/components/domain/bulk-enrollment-form";
 import { EnrollmentTable } from "@/components/domain/enrollment-table";
 import { Alert } from "@/components/ui/alert";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { FilterBar } from "@/components/ui/filter-bar";
 import { Field, Select } from "@/components/ui/form";
+import { ListQueryHidden } from "@/components/ui/list-query-hidden";
 import { ModalForm } from "@/components/ui/modal-form";
 import { PageHeader } from "@/components/ui/page-header";
+import { Pagination } from "@/components/ui/pagination";
+import { SearchField } from "@/components/ui/search-field";
+import { SortLinks } from "@/components/ui/sort-links";
 import {
   getActiveAcademicYear,
   listAcademicYears,
   listClasses,
-  listEnrollments,
+  listEnrollmentsPaged,
   listStudentEnrollmentOptions,
 } from "@/data-access/master";
 import {
@@ -26,8 +25,16 @@ import {
   type EnrollmentStatus,
 } from "@/db/schema/enums";
 import { requirePagePermission } from "@/lib/dal";
+import {
+  buildListHref,
+  parsePage,
+  parsePerPage,
+  resolveDirection,
+  resolveSort,
+} from "@/lib/pagination";
 import { classLabel } from "@/lib/utils";
 import {
+  bulkUpdateEnrollmentStatus,
   moveEnrollmentsBulk,
   removeEnrollment,
   saveEnrollment,
@@ -100,39 +107,65 @@ function EnrollmentFields({
   );
 }
 
+const sortOptions = ["student", "class", "status"] as const;
+const BASE_PATH = "/admin/enrollment";
+
 export default async function EnrollmentPage({
   searchParams,
 }: {
-  searchParams: Promise<{ year?: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   await requirePagePermission("manage:master_data");
   const params = await searchParams;
+
+  const q = typeof params.q === "string" ? params.q : undefined;
+  const classId = typeof params.classId === "string" ? params.classId : undefined;
+  const status: EnrollmentStatus | undefined =
+    typeof params.status === "string" && params.status in ENROLLMENT_STATUS_LABELS
+      ? (params.status as EnrollmentStatus)
+      : undefined;
+  const sort = resolveSort(params.sort, sortOptions, "student");
+  const dir = resolveDirection(params.dir, "asc");
+  const page = parsePage(params.page);
+  const perPage = parsePerPage(params.perPage);
+  const returnTo = buildListHref(BASE_PATH, params);
+
   const [years, activeYear] = await Promise.all([
     listAcademicYears(),
     getActiveAcademicYear(),
   ]);
-  const selectedYearId =
-    params.year ?? activeYear?.id ?? years[0]?.id ?? "";
+  const requestedYearId =
+    typeof params.year === "string" ? params.year : undefined;
+  const selectedYearId = requestedYearId ?? activeYear?.id ?? years[0]?.id ?? "";
 
-  const [classes, students, enrollments] = await Promise.all([
+  const [classes, students, result] = await Promise.all([
     selectedYearId ? listClasses(selectedYearId) : Promise.resolve([]),
     selectedYearId
       ? listStudentEnrollmentOptions(selectedYearId)
       : Promise.resolve([]),
-    listEnrollments(selectedYearId || undefined),
+    listEnrollmentsPaged({
+      academicYearId: selectedYearId || undefined,
+      q,
+      classId,
+      status,
+      sort,
+      dir,
+      page,
+      perPage,
+    }),
   ]);
 
   const statusOptions = (
     Object.keys(ENROLLMENT_STATUS_LABELS) as EnrollmentStatus[]
-  ).map((status) => ({
-    value: status,
-    label: ENROLLMENT_STATUS_LABELS[status],
+  ).map((value) => ({
+    value,
+    label: ENROLLMENT_STATUS_LABELS[value],
   }));
   const classOptions = classes.map((row) => ({
     id: row.id,
     label: classLabel(row),
   }));
-  const enrollmentRows = enrollments.map((row) => ({
+  const enrollmentRows = result.rows.map((row) => ({
     id: row.id,
     studentName: row.studentName,
     nisn: row.nisn,
@@ -155,6 +188,7 @@ export default async function EnrollmentPage({
             <>
               <ModalForm
                 action={saveEnrollmentBulk}
+                returnTo={returnTo}
                 triggerLabel="Enrollment Massal"
                 triggerIcon={<Users className="h-4 w-4" />}
                 title="Enrollment Massal"
@@ -172,6 +206,7 @@ export default async function EnrollmentPage({
               </ModalForm>
               <ModalForm
                 action={saveEnrollment}
+                returnTo={returnTo}
                 triggerLabel="Tambah Satuan"
                 triggerIcon={<Plus className="h-4 w-4" />}
                 triggerVariant="secondary"
@@ -196,43 +231,58 @@ export default async function EnrollmentPage({
         </Alert>
       ) : null}
 
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Filter className="h-4 w-4" />
-            Pilih Tahun Ajaran
-          </CardTitle>
-          <CardDescription>
-            Daftar kelas dan enrollment mengikuti tahun ajaran yang dipilih.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form method="get" className="flex flex-wrap items-end gap-3">
-            <div className="w-full max-w-xs">
-              <Field label="Tahun Ajaran" htmlFor="year">
-                <Select id="year" name="year" defaultValue={selectedYearId}>
-                  {years.map((year) => (
-                    <option key={year.id} value={year.id}>
-                      {year.name}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-            </div>
-            <button
-              type="submit"
-              className="h-11 rounded-md bg-indigo-600 px-4 text-sm font-medium text-white hover:bg-indigo-700"
-            >
-              Tampilkan
-            </button>
-          </form>
-        </CardContent>
-      </Card>
+      <FilterBar
+        resetHref={BASE_PATH}
+        description="Pilih tahun ajaran, cari siswa, lalu saring kelas/status. Centang baris untuk aksi massal."
+        formClassName="sm:grid-cols-2 lg:grid-cols-4"
+      >
+        <ListQueryHidden perPage={perPage} sort={sort} dir={dir} />
+        <Field label="Tahun Ajaran" htmlFor="year">
+          <Select id="year" name="year" defaultValue={selectedYearId}>
+            {years.map((year) => (
+              <option key={year.id} value={year.id}>
+                {year.name}
+                {year.isActive ? " (aktif)" : ""}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <SearchField
+          defaultValue={q}
+          placeholder="Cari nama atau NISN siswa..."
+        />
+        <Field label="Kelas" htmlFor="classId">
+          <Select id="classId" name="classId" defaultValue={classId ?? ""}>
+            <option value="">Semua kelas</option>
+            {classes.map((row) => (
+              <option key={row.id} value={row.id}>
+                {classLabel(row)}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="Status" htmlFor="status">
+          <Select id="status" name="status" defaultValue={status ?? ""}>
+            <option value="">Semua status</option>
+            {statusOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </Select>
+        </Field>
+      </FilterBar>
 
       <div className="space-y-3">
         <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-500">
           <UserPlus className="h-4 w-4" />
           Daftar Enrollment
+          <Badge variant="neutral">{result.total} data</Badge>
+          {selectedYearId ? (
+            <Badge variant="primary">
+              {years.find((year) => year.id === selectedYearId)?.name ?? ""}
+            </Badge>
+          ) : null}
         </h2>
         <EnrollmentTable
           rows={enrollmentRows}
@@ -241,7 +291,32 @@ export default async function EnrollmentPage({
           statusOptions={statusOptions}
           updateAction={updateEnrollmentAction}
           moveAction={moveEnrollmentsBulk}
+          statusAction={bulkUpdateEnrollmentStatus}
           removeAction={removeEnrollment}
+          returnTo={returnTo}
+          sortControls={
+            <SortLinks
+              items={[
+                { label: "Siswa", column: "student" },
+                { label: "Kelas", column: "class" },
+                { label: "Status", column: "status" },
+              ]}
+              currentSort={sort}
+              currentDir={dir}
+              basePath={BASE_PATH}
+              searchParams={params}
+            />
+          }
+        />
+        <Pagination
+          basePath={BASE_PATH}
+          searchParams={params}
+          page={result.page}
+          perPage={result.perPage}
+          total={result.total}
+          totalPages={result.totalPages}
+          from={result.from}
+          to={result.to}
         />
       </div>
     </div>

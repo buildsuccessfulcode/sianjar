@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Search } from "lucide-react";
+import { ChevronLeft, ChevronRight, Search } from "lucide-react";
 
 import { Field, Input, Select } from "@/components/ui/form";
 import { cn } from "@/lib/utils";
@@ -28,7 +28,9 @@ export function BulkEnrollmentForm({
   yearId: string;
   statusOptions: StatusOption[];
 }) {
+  const PAGE_SIZE = 50;
   const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const filtered = useMemo(() => {
@@ -44,6 +46,12 @@ export function BulkEnrollmentForm({
   const eligible = useMemo(
     () => filtered.filter((student) => !student.enrollmentStatus),
     [filtered],
+  );
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pageRows = filtered.slice(
+    (currentPage - 1) * PAGE_SIZE,
+    currentPage * PAGE_SIZE,
   );
   const allEligibleSelected =
     eligible.length > 0 && eligible.every((student) => selected.has(student.id));
@@ -109,7 +117,10 @@ export function BulkEnrollmentForm({
               id="bulk-search"
               type="search"
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setPage(1);
+              }}
               placeholder="Nama atau NISN"
               className="pl-9"
             />
@@ -146,7 +157,7 @@ export function BulkEnrollmentForm({
               Tidak ada siswa yang cocok dengan pencarian.
             </p>
           ) : (
-            filtered.map((student) => {
+            pageRows.map((student) => {
               const isEnrolled = Boolean(student.enrollmentStatus);
               return (
                 <label
@@ -188,6 +199,40 @@ export function BulkEnrollmentForm({
             })
           )}
         </div>
+        {filtered.length > PAGE_SIZE ? (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-500">
+            <span>
+              Menampilkan {(currentPage - 1) * PAGE_SIZE + 1}–
+              {Math.min(currentPage * PAGE_SIZE, filtered.length)} dari{" "}
+              {filtered.length} siswa
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setPage((value) => Math.max(1, value - 1))}
+                disabled={currentPage === 1}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+                aria-label="Halaman sebelumnya"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <span className="px-2 font-medium text-slate-700">
+                {currentPage} / {totalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() =>
+                  setPage((value) => Math.min(totalPages, value + 1))
+                }
+                disabled={currentPage === totalPages}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+                aria-label="Halaman berikutnya"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        ) : null}
         <p className="text-xs text-slate-500">
           Siswa yang sudah terdaftar pada tahun ajaran ini dilewati.
         </p>
