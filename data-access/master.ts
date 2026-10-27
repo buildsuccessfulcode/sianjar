@@ -54,6 +54,7 @@ import type {
   enrollmentSchema,
   enrollmentUpdateSchema,
   semesterSchema,
+  studentBulkStatusSchema,
   studentCreateSchema,
   studentImportRowSchema,
   studentUpdateSchema,
@@ -72,7 +73,9 @@ export type TeacherCreateInput = z.infer<typeof teacherCreateSchema>;
 export type TeacherUpdateInput = z.infer<typeof teacherUpdateSchema>;
 export type StudentCreateInput = z.infer<typeof studentCreateSchema>;
 export type StudentUpdateInput = z.infer<typeof studentUpdateSchema>;
+export type StudentBulkStatusInput = z.infer<typeof studentBulkStatusSchema>;
 export type StudentImportInput = z.infer<typeof studentImportRowSchema>;
+export type StudentImportRowInput = StudentImportInput & { classId?: string };
 export type EnrollmentInput = z.infer<typeof enrollmentSchema>;
 export type EnrollmentUpdateInput = z.infer<typeof enrollmentUpdateSchema>;
 export type EnrollmentBulkInput = z.infer<typeof enrollmentBulkSchema>;
@@ -92,6 +95,7 @@ export type BulkEnrollmentResult = {
 
 export type StudentImportResult = {
   created: number;
+  enrolled: number;
   skipped: { nisn: string; name: string; reason: string }[];
 };
 
@@ -650,9 +654,10 @@ export async function updateTeacher(
           name: input.name,
           email: input.email,
           isActive: input.isActive,
+          deletedAt: input.isActive ? null : undefined,
           updatedAt: new Date(),
         })
-        .where(and(eq(users.id, id), isNull(users.deletedAt)))
+        .where(eq(users.id, id))
         .returning();
       if (!user) throw new NotFoundError("Guru tidak ditemukan.");
 
@@ -694,10 +699,14 @@ export async function updateTeacher(
   }
 }
 
-export async function softDeleteTeacher(id: string) {
+export async function setTeacherActive(id: string, isActive: boolean) {
   const [row] = await getDb()
     .update(users)
-    .set({ isActive: false, deletedAt: new Date(), updatedAt: new Date() })
+    .set({
+      isActive,
+      deletedAt: isActive ? null : undefined,
+      updatedAt: new Date(),
+    })
     .where(eq(users.id, id))
     .returning();
   if (!row) throw new NotFoundError("Guru tidak ditemukan.");
@@ -862,21 +871,27 @@ export async function createStudent(input: StudentCreateInput) {
 }
 
 export async function importStudents(
-  rows: StudentImportInput[],
+  rows: StudentImportRowInput[],
   actorId: string,
 ): Promise<StudentImportResult> {
   if (rows.length === 0) {
-    return { created: 0, skipped: [] };
+    return { created: 0, enrolled: 0, skipped: [] };
   }
 
   const db = getDbPool();
   return db.transaction(async (tx) => {
     const nisns = rows.map((row) => row.nisn);
     const existingRows = await tx
-      .select({ nisn: students.nisn })
+      .select({
+        id: students.id,
+        nisn: students.nisn,
+        name: students.name,
+        isActive: students.isActive,
+        deletedAt: students.deletedAt,
+      })
       .from(students)
       .where(inArray(students.nisn, nisns));
-    const existing = new Set(existingRows.map((row) => row.nisn));
+    const existing = new Map(existingRows.map((row) => [row.nisn, row]));
 
     const toInsert: (typeof students.$inferInsert)[] = [];
     const skipped: StudentImportResult["skipped"] = [];
@@ -891,7 +906,13 @@ export async function importStudents(
         continue;
       }
 
-      existing.add(row.nisn);
+      existing.set(row.nisn, {
+        id: "",
+        nisn: row.nisn,
+        name: row.name,
+        isActive: true,
+        deletedAt: null,
+      });
       toInsert.push({
         nisn: row.nisn,
         name: row.name,
@@ -900,20 +921,150 @@ export async function importStudents(
       });
     }
 
-    if (toInsert.length > 0) {
-      await tx.insert(students).values(toInsert);
+    const inserted =
+      toInsert.length > 0
+        ? await tx
+            .insert(students)
+            .values(toInsert)
+            .returning({ id: students.id, nisn: students.nisn })
+        : [];
+    for (const row of inserted) {
+      const current = existing.get(row.nisn);
+      if (current) existing.set(row.nisn, { ...current, id: row.id });
+    }
+
+    const studentIdByNisn = new Map<string, string>();
+    for (const row of existing.values()) {
+      if (row.id && row.isActive && !row.deletedAt) {
+        studentIdByNisn.set(row.nisn, row.id);
+      }
+    }
+
+    const classIds = [
+      ...new Set(rows.map((row) => row.classId).filter(Boolean)),
+    ] as string[];
+    const classRows =
+      classIds.length > 0
+        ? await tx
+            .select({
+              id: classes.id,
+              academicYearId: classes.academicYearId,
+            })
+            .from(classes)
+            .where(and(inArray(classes.id, classIds), isNull(classes.deletedAt)))
+        : [];
+    const classYearById = new Map(
+      classRows.map((row) => [row.id, row.academicYearId]),
+    );
+    if (classRows.length !== classIds.length) {
+      throw new NotFoundError("Sebagian kelas tidak ditemukan.");
+    }
+
+    const enrollmentTargets = rows
+      .map((row) => {
+        if (!row.classId) return null;
+        const studentId = studentIdByNisn.get(row.nisn);
+        const academicYearId = classYearById.get(row.classId);
+        if (!studentId || !academicYearId) return null;
+        return {
+          studentId,
+          classId: row.classId,
+          academicYearId,
+        };
+      })
+      .filter((row): row is NonNullable<typeof row> => row !== null);
+
+    let enrolled = 0;
+    if (enrollmentTargets.length > 0) {
+      const targetStudentIds = [
+        ...new Set(enrollmentTargets.map((row) => row.studentId)),
+      ];
+      const targetYearIds = [
+        ...new Set(enrollmentTargets.map((row) => row.academicYearId)),
+      ];
+      const existingEnrollments = await tx
+        .select({
+          id: studentEnrollments.id,
+          studentId: studentEnrollments.studentId,
+          academicYearId: studentEnrollments.academicYearId,
+          deletedAt: studentEnrollments.deletedAt,
+        })
+        .from(studentEnrollments)
+        .where(
+          and(
+            inArray(studentEnrollments.studentId, targetStudentIds),
+            inArray(studentEnrollments.academicYearId, targetYearIds),
+          ),
+        );
+      const enrollmentByKey = new Map(
+        existingEnrollments.map((row) => [
+          `${row.studentId}:${row.academicYearId}`,
+          row,
+        ]),
+      );
+
+      const toInsertEnrollments: (typeof studentEnrollments.$inferInsert)[] =
+        [];
+      const reactivateByClass = new Map<string, string[]>();
+      for (const target of enrollmentTargets) {
+        const key = `${target.studentId}:${target.academicYearId}`;
+        const existingEnrollment = enrollmentByKey.get(key);
+        if (existingEnrollment) {
+          if (existingEnrollment.deletedAt) {
+            const ids = reactivateByClass.get(target.classId) ?? [];
+            ids.push(existingEnrollment.id);
+            reactivateByClass.set(target.classId, ids);
+            enrolled += 1;
+          }
+          continue;
+        }
+        enrollmentByKey.set(key, {
+          id: "",
+          studentId: target.studentId,
+          academicYearId: target.academicYearId,
+          deletedAt: null,
+        });
+        toInsertEnrollments.push({
+          studentId: target.studentId,
+          classId: target.classId,
+          academicYearId: target.academicYearId,
+          status: "ACTIVE",
+        });
+        enrolled += 1;
+      }
+
+      for (const [classId, ids] of reactivateByClass) {
+        await tx
+          .update(studentEnrollments)
+          .set({
+            classId,
+            status: "ACTIVE",
+            promotionBatchId: null,
+            deletedAt: null,
+            updatedAt: new Date(),
+          })
+          .where(inArray(studentEnrollments.id, ids));
+      }
+
+      if (toInsertEnrollments.length > 0) {
+        await tx.insert(studentEnrollments).values(toInsertEnrollments);
+      }
+    }
+
+    if (toInsert.length > 0 || enrolled > 0) {
       await writeAudit(tx, {
         actorId,
         action: "student.import",
         entityType: "student",
         payload: {
           created: toInsert.length,
+          enrolled,
           skipped: skipped.length,
         },
       });
     }
 
-    return { created: toInsert.length, skipped };
+    return { created: inserted.length, enrolled, skipped };
   });
 }
 
@@ -927,9 +1078,10 @@ export async function updateStudent(id: string, input: StudentUpdateInput) {
         gender: input.gender,
         birthDate: input.birthDate ?? null,
         isActive: input.isActive,
+        deletedAt: input.isActive ? null : undefined,
         updatedAt: new Date(),
       })
-      .where(and(eq(students.id, id), isNull(students.deletedAt)))
+      .where(eq(students.id, id))
       .returning();
     if (!row) throw new NotFoundError("Siswa tidak ditemukan.");
     return row;
@@ -941,13 +1093,47 @@ export async function updateStudent(id: string, input: StudentUpdateInput) {
   }
 }
 
-export async function softDeleteStudent(id: string) {
+export async function setStudentActive(id: string, isActive: boolean) {
   const [row] = await getDb()
     .update(students)
-    .set({ isActive: false, deletedAt: new Date(), updatedAt: new Date() })
+    .set({
+      isActive,
+      deletedAt: isActive ? null : undefined,
+      updatedAt: new Date(),
+    })
     .where(eq(students.id, id))
     .returning();
   if (!row) throw new NotFoundError("Siswa tidak ditemukan.");
+}
+
+export async function setStudentsActive(
+  input: StudentBulkStatusInput,
+  actorId: string,
+) {
+  const studentIds = [...new Set(input.studentIds)];
+  if (studentIds.length === 0) return { updated: 0 };
+
+  const db = getDbPool();
+  return db.transaction(async (tx) => {
+    const rows = await tx
+      .update(students)
+      .set({
+        isActive: input.isActive,
+        deletedAt: input.isActive ? null : undefined,
+        updatedAt: new Date(),
+      })
+      .where(inArray(students.id, studentIds))
+      .returning({ id: students.id });
+
+    await writeAudit(tx, {
+      actorId,
+      action: "student.bulk_status",
+      entityType: "student",
+      payload: { count: rows.length, isActive: input.isActive },
+    });
+
+    return { updated: rows.length };
+  });
 }
 
 export async function listEnrollments(academicYearId?: string) {
@@ -1806,7 +1992,7 @@ export async function listTeachersPaged(
 
   const conditions = [
     eq(userRoles.role, "GURU"),
-    isNull(users.deletedAt),
+    filters.status === "inactive" ? undefined : isNull(users.deletedAt),
     pattern
       ? or(
           ilike(users.name, pattern),
@@ -1898,7 +2084,7 @@ export async function listStudentsPaged(
     : sql`false`;
 
   const conditions = [
-    isNull(students.deletedAt),
+    filters.status === "inactive" ? undefined : isNull(students.deletedAt),
     filters.gender ? eq(students.gender, filters.gender) : undefined,
     filters.status === "active"
       ? eq(students.isActive, true)

@@ -89,6 +89,17 @@ export const studentUpdateSchema = studentCreateSchema.extend({
   isActive: checkbox.optional().default(true),
 });
 
+export const studentBulkStatusSchema = z.object({
+  studentIds: z
+    .array(uuidSchema)
+    .min(1, "Pilih minimal satu siswa.")
+    .max(2000, "Maksimal 2000 siswa per batch.")
+    .transform((ids) => [...new Set(ids)]),
+  isActive: z
+    .enum(["active", "inactive"], { message: "Status siswa tidak valid." })
+    .transform((value) => value === "active"),
+});
+
 export const studentImportRowSchema = z.object({
   rowNumber: z.number().int().positive(),
   nisn: z
@@ -109,6 +120,12 @@ export const studentImportRowSchema = z.object({
     .optional()
     .transform((value) => (value ? value : undefined))
     .pipe(dateString.optional()),
+  classLabel: z
+    .string()
+    .trim()
+    .max(50, "Nama kelas maksimal 50 karakter.")
+    .optional()
+    .transform((value) => (value ? value : undefined)),
 });
 
 const enrollmentStatusSchema = z

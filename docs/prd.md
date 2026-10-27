@@ -175,6 +175,8 @@ Aplikasi dirancang untuk berjalan di stack gratis pada tahap pilot: Vercel Hobby
 **Sebagai** Admin, **saya ingin** CRUD tahun ajaran, semester, jurusan, kelas, mapel, guru, siswa, dan enrollment **agar** data dasar siap sebelum operasional.
 
 - Soft delete (`deleted_at`) untuk entitas yang punya relasi historis; data yang di-soft-delete tidak ditampilkan pada daftar operasional. Daftar menyediakan filter status aktif/nonaktif.
+- Menonaktifkan guru/siswa mengubah `is_active` tanpa soft delete agar tetap dapat ditemukan lewat filter Nonaktif.
+- Master siswa mendukung aksi massal untuk mengaktifkan atau menonaktifkan beberapa siswa pada halaman aktif.
 - Master data yang sudah direferensikan tidak di-hard-delete.
 - Semua daftar master mendukung pencarian server-side, filter, sorting, pagination, dan pilihan jumlah baris per halaman.
 - Validasi unik: nama tahun ajaran, kode jurusan, kode mapel, NISN, NIP, email user, dan kombinasi kelas.
@@ -266,10 +268,13 @@ Prioritas: **P0** wajib v1, **P1** nice-to-have, **P2** roadmap.
 ### FR-08 Import Excel Siswa — P1 (diimplementasikan)
 
 - Admin dapat mengunduh template `.xlsx` dan mengunggahnya kembali dari halaman `/admin/siswa`.
-- Kolom template: NISN, Nama Lengkap, Jenis Kelamin (L/P), Tanggal Lahir (opsional, `YYYY-MM-DD`).
+- Kolom template: NISN, Nama Lengkap, Jenis Kelamin (L/P), Tanggal Lahir (opsional, `YYYY-MM-DD`), dan Kelas (opsional).
+- Template mengikuti tahun ajaran yang dipilih pada filter; sheet **Kelas** memuat daftar kelas yang valid.
+- Jika kolom Kelas diisi, import sekaligus membuat enrollment pada tahun ajaran tersebut dalam transaksi yang sama. Nama kelas harus cocok dengan kelas yang tersedia.
+- Siswa dengan NISN yang sudah terdaftar tidak dibuat ulang, tetapi tetap dapat di-enroll bila kolom Kelas diisi dan belum punya enrollment pada tahun ajaran itu.
 - Validasi seluruh baris sebelum insert; file dengan baris bermasalah ditolak dengan laporan nomor baris.
-- NISN yang sudah terdaftar dilewati dan dilaporkan; NISN duplikat di dalam file dianggap error.
-- Maksimal 5000 baris dan 5 MB per file. Import siswa dicatat di audit log.
+- NISN duplikat di dalam file dianggap error.
+- Maksimal 5000 baris dan 5 MB per file. Import siswa dan enrollment dicatat di audit log.
 
 ### FR-09 Notifikasi In-App — P2
 

@@ -1,12 +1,14 @@
 import { buildStudentImportTemplate } from "@/lib/excel/students";
 import { auth } from "@/lib/auth";
+import { listClasses } from "@/data-access/master";
 import type { Role } from "@/db/schema/enums";
 import { hasPermission } from "@/lib/permissions";
+import { classLabel } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export async function GET() {
+export async function GET(request: Request) {
   const session = await auth();
   if (!session?.user?.id) {
     return new Response("Unauthorized", { status: 401 });
@@ -17,7 +19,11 @@ export async function GET() {
     return new Response("Forbidden", { status: 403 });
   }
 
-  const file = await buildStudentImportTemplate();
+  const yearId = new URL(request.url).searchParams.get("year")?.trim();
+  const classes = yearId ? await listClasses(yearId) : [];
+  const file = await buildStudentImportTemplate(
+    classes.map((row) => ({ label: classLabel(row) })),
+  );
   return new Response(new Uint8Array(file), {
     headers: {
       "Content-Type":

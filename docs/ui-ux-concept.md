@@ -298,7 +298,9 @@ Pola halaman konsisten:
 
 Filter, sorting, dan pagination disimpan di query string agar dapat di-bookmark dan tidak hilang saat refresh. Pencarian dan filter dijalankan di server; halaman tidak menarik seluruh isi tabel.
 
-Soft delete menyembunyikan data dari daftar operasional, tetapi baris histori dan relasinya tetap tersimpan. Daftar menyediakan filter status aktif/nonaktif.
+Soft delete menyembunyikan data dari daftar operasional, tetapi baris histori dan relasinya tetap tersimpan. Daftar menyediakan filter status aktif/nonaktif; aksi **Nonaktifkan** hanya mengubah status akun tanpa menyembunyikan baris dari filter status. Baris nonaktif menampilkan aksi **Aktifkan** untuk mengaktifkan kembali.
+
+Master siswa menyediakan seleksi massal: centang beberapa baris, pilih **Aktif** atau **Nonaktif**, lalu terapkan lewat tombol konfirmasi. Aksi massal hanya berlaku untuk baris pada halaman aktif. Status akun siswa dan status enrollment ditampilkan pada kolom terpisah agar tidak tertukar.
 
 ### 4.7a Enrollment
 
@@ -333,11 +335,12 @@ Siswa yang sudah terdaftar pada tahun ajaran ini dilewati.
 ### 4.7b Import Siswa dari Excel
 
 - Tombol **Import Excel** di header `/admin/siswa` membuka modal berisi ringkasan cara pakai, tombol **Unduh Template Excel**, dan input file.
-- Template `.xlsx` memiliki sheet **Siswa** (kolom NISN, Nama Lengkap, Jenis Kelamin, Tanggal Lahir) dan sheet **Petunjuk**.
-- Kolom NISN disimpan sebagai teks; Jenis Kelamin memakai validasi daftar `L/P`; Tanggal Lahir opsional format `YYYY-MM-DD`.
-- Saat submit, file divalidasi penuh. Jika ada baris bermasalah, import dibatalkan dan toast menampilkan nomor baris beserta penyebabnya.
-- Jika valid, toast menampilkan jumlah siswa yang diimpor dan jumlah NISN yang dilewati karena sudah terdaftar.
-- Kelas tidak diisi dari file; setelah import, admin mengatur penempatan melalui **Enrollment**.
+- Template mengikuti tahun ajaran yang sedang dipilih pada filter. Link unduhan menyertakan `?year=<id>`.
+- Template `.xlsx` memiliki sheet **Siswa** (kolom NISN, Nama Lengkap, Jenis Kelamin, Tanggal Lahir, Kelas), sheet **Kelas** (daftar nama kelas valid), dan sheet **Petunjuk**.
+- Kolom NISN disimpan sebagai teks; Jenis Kelamin memakai validasi daftar `L/P`; Tanggal Lahir opsional format `YYYY-MM-DD`; Kelas opsional dan memakai validasi daftar dari sheet **Kelas**.
+- Saat submit, file divalidasi penuh. Jika ada baris bermasalah atau nama kelas tidak cocok, import dibatalkan dan toast menampilkan nomor baris beserta penyebabnya.
+- Jika valid, import membuat siswa sekaligus enrollment pada tahun ajaran terpilih dalam satu transaksi. Toast menampilkan jumlah siswa baru, jumlah enrollment yang dibuat, dan jumlah NISN yang dilewati pembuatannya karena sudah terdaftar.
+- Jika kolom Kelas kosong, siswa hanya dibuat tanpa enrollment dan penempatan diatur melalui **Enrollment**.
 - Batas: file `.xlsx` maksimal 5 MB dan 5000 baris data.
 
 **Mapping guru–mapel**
@@ -375,6 +378,7 @@ Siswa yang sudah terdaftar pada tahun ajaran ini dilewati.
 | `AttendanceForm` | `components/domain/attendance-form.tsx` | Form jurnal + absensi client-side |
 | `BulkEnrollmentForm` | `components/domain/bulk-enrollment-form.tsx` | Checklist siswa + pencarian untuk enrollment massal |
 | `EnrollmentTable` | `components/domain/enrollment-table.tsx` | Tabel enrollment, ubah/pindah kelas, seleksi massal |
+| `StudentTable` | `components/domain/student-table.tsx` | Tabel siswa, edit/nonaktifkan, seleksi massal status aktif |
 | `JournalTable` | halaman jurnal | Daftar/riwayat jurnal |
 | `PromotionPreview` | halaman promosi | Ringkasan mapping + commit |
 

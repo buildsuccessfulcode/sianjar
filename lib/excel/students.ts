@@ -16,7 +16,11 @@ export type StudentImportParseResult = {
   errors: { rowNumber: number; message: string }[];
 };
 
-type ColumnKey = "nisn" | "name" | "gender" | "birthDate";
+export type StudentImportParseOptions = {
+  classLabels?: string[];
+};
+
+type ColumnKey = "nisn" | "name" | "gender" | "birthDate" | "classLabel";
 
 const COLUMN_ALIASES: Record<ColumnKey, string[]> = {
   nisn: [
@@ -29,6 +33,7 @@ const COLUMN_ALIASES: Record<ColumnKey, string[]> = {
   name: ["nama", "namalengkap", "namasiswa"],
   gender: ["jeniskelamin", "jk", "gender", "lp"],
   birthDate: ["tanggallahir", "tgllahir", "birthdate", "birthday"],
+  classLabel: ["kelas", "class", "rombel", "namakelas"],
 };
 
 const TEMPLATE_HEADERS = [
@@ -36,9 +41,14 @@ const TEMPLATE_HEADERS = [
   "Nama Lengkap",
   "Jenis Kelamin",
   "Tanggal Lahir",
+  "Kelas",
 ];
 
 function normalizeHeader(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+export function normalizeClassLabel(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
@@ -154,6 +164,7 @@ function parseBirthDate(cell: Cell): {
 
 export async function parseStudentWorkbook(
   buffer: Buffer,
+  options: StudentImportParseOptions = {},
 ): Promise<StudentImportParseResult> {
   if (buffer.byteLength > MAX_STUDENT_IMPORT_FILE_SIZE) {
     throw new ValidationError("Ukuran file maksimal 5 MB.");
@@ -209,6 +220,9 @@ export async function parseStudentWorkbook(
   const rows: StudentImportRow[] = [];
   const errors: StudentImportParseResult["errors"] = [];
   const seenNisn = new Map<string, number>();
+  const allowedClasses = options.classLabels
+    ? new Set(options.classLabels.map(normalizeClassLabel))
+    : null;
 
   for (let rowNumber = 2; rowNumber <= lastRow; rowNumber += 1) {
     const row = worksheet.getRow(rowNumber);
@@ -224,11 +238,16 @@ export async function parseStudentWorkbook(
     const birthDateCell = headerCells.has("birthDate")
       ? row.getCell(headerCells.get("birthDate")!)
       : null;
+    const classCell = headerCells.has("classLabel")
+      ? row.getCell(headerCells.get("classLabel")!)
+      : null;
+    const classLabel = classCell ? cellText(classCell) : "";
 
     if (
       !nisn &&
       !name &&
       !genderText &&
+      !classLabel &&
       (!birthDateCell || cellText(birthDateCell) === "")
     ) {
       continue;
@@ -251,12 +270,25 @@ export async function parseStudentWorkbook(
       continue;
     }
 
+    if (
+      classLabel &&
+      allowedClasses &&
+      !allowedClasses.has(normalizeClassLabel(classLabel))
+    ) {
+      errors.push({
+        rowNumber,
+        message: `Kelas "${classLabel}" tidak ditemukan pada tahun ajaran ini.`,
+      });
+      continue;
+    }
+
     const parsed = studentImportRowSchema.safeParse({
       rowNumber,
       nisn,
       name,
       gender,
       birthDate: birthDate.value,
+      classLabel: classLabel || undefined,
     });
     if (!parsed.success) {
       errors.push({
@@ -282,7 +314,9 @@ export async function parseStudentWorkbook(
   return { rows, errors };
 }
 
-export async function buildStudentImportTemplate() {
+export async function buildStudentImportTemplate(
+  classes: { label: string }[] = [],
+) {
   const workbook = new Workbook();
   workbook.creator = "SiJAR";
   workbook.created = new Date();
@@ -295,6 +329,7 @@ export async function buildStudentImportTemplate() {
     { header: TEMPLATE_HEADERS[1], key: "name", width: 34 },
     { header: TEMPLATE_HEADERS[2], key: "gender", width: 20 },
     { header: TEMPLATE_HEADERS[3], key: "birthDate", width: 20 },
+    { header: TEMPLATE_HEADERS[4], key: "classLabel", width: 24 },
   ];
 
   const headerRow = worksheet.getRow(1);
@@ -310,7 +345,8 @@ export async function buildStudentImportTemplate() {
   worksheet.getColumn("nisn").numFmt = "@";
   worksheet.getColumn("birthDate").numFmt = "yyyy-mm-dd";
   worksheet.getColumn("gender").numFmt = "@";
-  worksheet.autoFilter = "A1:D1";
+  worksheet.getColumn("classLabel").numFmt = "@";
+  worksheet.autoFilter = "A1:E1";
   const validations = worksheet as unknown as {
     dataValidations: {
       add(range: string, validation: DataValidation): void;
@@ -325,6 +361,24 @@ export async function buildStudentImportTemplate() {
     error: "Gunakan L untuk Laki-laki atau P untuk Perempuan.",
   });
 
+  if (classes.length > 0) {
+    const classSheet = workbook.addWorksheet("Kelas");
+    classSheet.getColumn(1).width = 30;
+    classSheet.addRow(["Nama Kelas"]);
+    classSheet.getRow(1).font = { bold: true };
+    classSheet.addRows(classes.map((row) => [row.label]));
+    validations.dataValidations.add("E2:E5001", {
+      type: "list",
+      allowBlank: true,
+      formulae: [
+        `'Kelas'!$A$2:$A$${Math.max(classes.length + 1, 2)}`,
+      ],
+      showErrorMessage: true,
+      errorTitle: "Kelas tidak valid",
+      error: "Pilih nama kelas yang tersedia pada sheet Kelas.",
+    });
+  }
+
   const guide = workbook.addWorksheet("Petunjuk");
   guide.getColumn(1).width = 100;
   guide.addRows([
@@ -335,8 +389,12 @@ export async function buildStudentImportTemplate() {
     ["3. Nama Lengkap wajib diisi, maksimal 255 karakter."],
     ["4. Jenis Kelamin: L (Laki-laki) atau P (Perempuan)."],
     ["5. Tanggal Lahir opsional, format YYYY-MM-DD (contoh 2010-08-17)."],
-    ["6. Baris dengan NISN yang sudah terdaftar di sistem akan dilewati."],
-    ["7. Kelas siswa diatur setelah import melalui menu Enrollment."],
+    [
+      classes.length > 0
+        ? "6. Kelas opsional. Isi persis dengan nama kelas pada sheet Kelas agar siswa langsung terdaftar pada tahun ajaran yang dipilih."
+        : "6. Kelas opsional. Belum ada kelas pada tahun ajaran aktif; kosongkan atau atur kelas melalui menu Enrollment setelah import.",
+    ],
+    ["7. Baris dengan NISN yang sudah terdaftar tidak dibuat ulang."],
     ["8. Maksimal 5000 siswa dan ukuran file maksimal 5 MB per import."],
   ]);
   guide.getRow(1).font = { bold: true, size: 14 };

@@ -32,7 +32,7 @@ import {
   resolveDirection,
   resolveSort,
 } from "@/lib/pagination";
-import { deleteTeacher, saveTeacher } from "./actions";
+import { saveTeacher, setTeacherStatus } from "./actions";
 
 export const metadata: Metadata = { title: "Guru" };
 export const dynamic = "force-dynamic";
@@ -311,16 +311,29 @@ export default async function TeacherPage({
                         }
                       />
                     </ModalForm>
-                    <form action={deleteTeacher}>
+                    <form action={setTeacherStatus}>
                       <input type="hidden" name="id" value={teacher.id} />
                       <input type="hidden" name="returnTo" value={returnTo} />
+                      <input
+                        type="hidden"
+                        name="isActive"
+                        value={teacher.isActive ? "false" : "true"}
+                      />
                       <ConfirmSubmit
                         variant="ghost"
                         size="sm"
-                        className="text-red-600 hover:bg-red-50 hover:text-red-700"
-                        message={`Nonaktifkan akun guru ${teacher.name}? Riwayat jurnal tetap tersimpan.`}
+                        className={
+                          teacher.isActive
+                            ? "text-red-600 hover:bg-red-50 hover:text-red-700"
+                            : "text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700"
+                        }
+                        message={
+                          teacher.isActive
+                            ? `Nonaktifkan akun guru ${teacher.name}? Riwayat jurnal tetap tersimpan.`
+                            : `Aktifkan kembali akun guru ${teacher.name}?`
+                        }
                       >
-                        Nonaktifkan
+                        {teacher.isActive ? "Nonaktifkan" : "Aktifkan"}
                       </ConfirmSubmit>
                     </form>
                   </div>

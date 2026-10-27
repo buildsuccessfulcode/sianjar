@@ -6,17 +6,22 @@ import { redirect } from "next/navigation";
 import {
   createStudent,
   importStudents,
-  softDeleteStudent,
+  listClasses,
+  setStudentActive,
+  setStudentsActive,
   updateStudent,
 } from "@/data-access/master";
 import { assertPermission } from "@/lib/dal";
-import { errorMessage } from "@/lib/errors";
+import { errorMessage, ValidationError } from "@/lib/errors";
 import {
   MAX_STUDENT_IMPORT_FILE_SIZE,
+  normalizeClassLabel,
   parseStudentWorkbook,
 } from "@/lib/excel/students";
 import { redirectWithFlash } from "@/lib/redirect";
+import { classLabel } from "@/lib/utils";
 import {
+  studentBulkStatusSchema,
   studentCreateSchema,
   studentUpdateSchema,
 } from "@/lib/validators/master";
@@ -99,9 +104,21 @@ export async function importStudentsAction(
       return { status: "error", message: "Ukuran file maksimal 5 MB." };
     }
 
+    const academicYearId = String(formData.get("academicYearId") ?? "").trim();
+    const classes = academicYearId ? await listClasses(academicYearId) : [];
+
     const parsed = await parseStudentWorkbook(
       Buffer.from(await file.arrayBuffer()),
+      { classLabels: classes.map((row) => classLabel(row)) },
     );
+
+    if (!academicYearId && parsed.rows.some((row) => row.classLabel)) {
+      return {
+        status: "error",
+        message:
+          "Kolom Kelas terisi tetapi tahun ajaran belum dipilih. Pilih tahun ajaran aktif atau kosongkan kolom Kelas.",
+      };
+    }
 
     if (parsed.errors.length > 0) {
       const details = parsed.errors
@@ -125,13 +142,25 @@ export async function importStudentsAction(
       };
     }
 
-    const result = await importStudents(parsed.rows, user.id);
-    revalidatePath(PATH);
+    const classIdByLabel = new Map(
+      classes.map((row) => [normalizeClassLabel(classLabel(row)), row.id]),
+    );
+    const rows = parsed.rows.map((row) => ({
+      ...row,
+      classId: row.classLabel
+        ? classIdByLabel.get(normalizeClassLabel(row.classLabel))
+        : undefined,
+    }));
 
-    if (result.created === 0) {
+    const result = await importStudents(rows, user.id);
+    revalidatePath(PATH);
+    revalidatePath("/admin/enrollment");
+
+    if (result.created === 0 && result.enrolled === 0) {
       return {
         status: "error",
-        message: "Tidak ada siswa baru. Semua NISN pada file sudah terdaftar.",
+        message:
+          "Tidak ada data baru. Semua NISN sudah terdaftar dan tidak ada enrollment baru.",
       };
     }
 
@@ -144,25 +173,75 @@ export async function importStudentsAction(
         ? `, +${result.skipped.length - 3} lainnya`
         : "";
 
+    const summary = [
+      result.created > 0 ? `${result.created} siswa baru diimpor` : null,
+      result.enrolled > 0
+        ? `${result.enrolled} enrollment dibuat`
+        : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
+
     return {
       status: "success",
       message:
         result.skipped.length > 0
-          ? `${result.created} siswa diimpor. ${result.skipped.length} dilewati karena NISN sudah terdaftar${skippedNames ? `: ${skippedNames}${skippedRest}` : ""}.`
-          : `${result.created} siswa berhasil diimpor.`,
+          ? `${summary}. ${result.skipped.length} NISN sudah terdaftar dilewati pembuatannya${skippedNames ? `: ${skippedNames}${skippedRest}` : ""}.`
+          : `${summary}.`,
     };
   } catch (error) {
     return { status: "error", message: errorMessage(error) };
   }
 }
 
-export async function deleteStudent(formData: FormData) {
+export async function setStudentStatus(formData: FormData) {
+  const isActive = formData.get("isActive") === "true";
   try {
     await assertPermission("manage:master_data");
-    await softDeleteStudent(String(formData.get("id")));
+    await setStudentActive(String(formData.get("id")), isActive);
   } catch (error) {
     redirect(redirectWithFlash(formData, PATH, "error", errorMessage(error)));
   }
   revalidatePath(PATH);
-  redirect(redirectWithFlash(formData, PATH, "success", "Siswa dinonaktifkan."));
+  revalidatePath("/admin/enrollment");
+  redirect(
+    redirectWithFlash(
+      formData,
+      PATH,
+      "success",
+      `Siswa ${isActive ? "diaktifkan" : "dinonaktifkan"}.`,
+    ),
+  );
+}
+
+export async function bulkSetStudentStatus(formData: FormData) {
+  let updated = 0;
+  let isActive = false;
+  try {
+    const user = await assertPermission("manage:master_data");
+    const parsed = studentBulkStatusSchema.safeParse({
+      studentIds: formData.getAll("studentIds").map(String),
+      isActive: formData.get("isActive"),
+    });
+    if (!parsed.success) {
+      throw new ValidationError(
+        parsed.error.issues[0]?.message ?? "Pilih siswa dan status.",
+      );
+    }
+    const result = await setStudentsActive(parsed.data, user.id);
+    updated = result.updated;
+    isActive = parsed.data.isActive;
+  } catch (error) {
+    redirect(redirectWithFlash(formData, PATH, "error", errorMessage(error)));
+  }
+  revalidatePath(PATH);
+  revalidatePath("/admin/enrollment");
+  redirect(
+    redirectWithFlash(
+      formData,
+      PATH,
+      "success",
+      `${updated} siswa ${isActive ? "diaktifkan" : "dinonaktifkan"}.`,
+    ),
+  );
 }

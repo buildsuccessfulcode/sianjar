@@ -1,27 +1,18 @@
 ﻿import type { Metadata } from "next";
 import Link from "next/link";
-import { Download, Pencil, Plus, Upload } from "lucide-react";
+import { Download, Plus, Upload } from "lucide-react";
 
+import { StudentFields, StudentTable } from "@/components/domain/student-table";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
-import { ConfirmSubmit } from "@/components/ui/confirm-submit";
 import { FilterBar } from "@/components/ui/filter-bar";
-import { Checkbox, Field, Input, Select } from "@/components/ui/form";
+import { Field, Input, Select } from "@/components/ui/form";
 import { ListQueryHidden } from "@/components/ui/list-query-hidden";
 import { ModalForm } from "@/components/ui/modal-form";
 import { PageHeader } from "@/components/ui/page-header";
 import { Pagination } from "@/components/ui/pagination";
 import { SearchField } from "@/components/ui/search-field";
-import { SortableHead } from "@/components/ui/sortable-head";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import {
   getActiveAcademicYear,
   listAcademicYears,
@@ -42,70 +33,14 @@ import {
 } from "@/lib/pagination";
 import { classLabel } from "@/lib/utils";
 import {
-  deleteStudent,
+  bulkSetStudentStatus,
   importStudentsAction,
   saveStudent,
+  setStudentStatus,
 } from "./actions";
 
 export const metadata: Metadata = { title: "Siswa" };
 export const dynamic = "force-dynamic";
-
-type StudentRow = Awaited<ReturnType<typeof listStudentsPaged>>["rows"][number];
-
-function StudentFields({ student }: { student?: StudentRow }) {
-  return (
-    <>
-      {student ? <input type="hidden" name="id" value={student.id} /> : null}
-      <Field label="NISN" htmlFor="nisn" required>
-        <Input
-          id="nisn"
-          name="nisn"
-          placeholder="0051234567"
-          defaultValue={student?.nisn}
-          required
-        />
-      </Field>
-      <Field label="Nama Lengkap" htmlFor="name" required>
-        <Input
-          id="name"
-          name="name"
-          placeholder="Ahmad Fauzi"
-          defaultValue={student?.name}
-          required
-        />
-      </Field>
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Jenis Kelamin" htmlFor="gender" required>
-          <Select
-            id="gender"
-            name="gender"
-            defaultValue={student?.gender ?? "L"}
-            required
-          >
-            <option value="L">Laki-laki</option>
-            <option value="P">Perempuan</option>
-          </Select>
-        </Field>
-        <Field label="Tanggal Lahir" htmlFor="birthDate">
-          <Input
-            id="birthDate"
-            name="birthDate"
-            type="date"
-            defaultValue={student?.birthDate ?? ""}
-          />
-        </Field>
-      </div>
-      {student ? (
-        <Checkbox
-          id="isActive"
-          name="isActive"
-          label="Siswa aktif"
-          defaultChecked={student.isActive}
-        />
-      ) : null}
-    </>
-  );
-}
 
 const sortOptions = ["name", "nisn", "class", "gender", "isActive"] as const;
 const BASE_PATH = "/admin/siswa";
@@ -178,26 +113,46 @@ export default async function StudentPage({
               triggerIcon={<Upload className="h-4 w-4" />}
               triggerVariant="secondary"
               title="Import Siswa dari Excel"
-              description="Gunakan template resmi agar nama dan urutan kolom sesuai."
+              description="Isi kolom Kelas agar siswa langsung terdaftar di Enrollment."
               submitLabel="Import Siswa"
               pendingText="Mengimpor..."
             >
+              <input
+                type="hidden"
+                name="academicYearId"
+                value={effectiveYearId}
+              />
               <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
                 <p>
                   Unduh template, isi data mulai baris 2, lalu unggah kembali
                   file <span className="font-medium text-slate-900">.xlsx</span>.
                 </p>
                 <a
-                  href="/admin/siswa/template"
+                  href={
+                    effectiveYearId
+                      ? `/admin/siswa/template?year=${effectiveYearId}`
+                      : "/admin/siswa/template"
+                  }
                   className={buttonVariants({ variant: "secondary", size: "sm" })}
                 >
                   <Download className="h-4 w-4" />
                   Unduh Template Excel
                 </a>
                 <p className="text-xs text-slate-500">
-                  Baris dengan NISN yang sudah terdaftar akan dilewati. Kelas
-                  siswa diatur melalui menu Enrollment setelah import.
+                  Kolom Kelas opsional. Isi persis dengan nama kelas yang
+                  tersedia agar siswa langsung masuk kelas pada tahun ajaran
+                  terpilih. NISN yang sudah terdaftar tidak dibuat ulang.
                 </p>
+                {classes.length > 0 ? (
+                  <p className="text-xs text-slate-500">
+                    Kelas tersedia: {classes.map(classLabel).join(", ")}.
+                  </p>
+                ) : (
+                  <p className="text-xs text-amber-600">
+                    Belum ada kelas pada tahun ajaran ini. Kolom Kelas akan
+                    diabaikan; atur penempatan melalui Enrollment.
+                  </p>
+                )}
               </div>
               <Field
                 label="File Excel"
@@ -309,119 +264,26 @@ export default async function StudentPage({
             </Badge>
           ) : null}
         </h2>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <SortableHead
-                label="NISN"
-                column="nisn"
-                currentSort={sort}
-                currentDir={dir}
-                basePath={BASE_PATH}
-                searchParams={params}
-              />
-              <SortableHead
-                label="Nama"
-                column="name"
-                currentSort={sort}
-                currentDir={dir}
-                basePath={BASE_PATH}
-                searchParams={params}
-              />
-              <SortableHead
-                label="Kelas"
-                column="class"
-                currentSort={sort}
-                currentDir={dir}
-                basePath={BASE_PATH}
-                searchParams={params}
-              />
-              <SortableHead
-                label="L/P"
-                column="gender"
-                currentSort={sort}
-                currentDir={dir}
-                basePath={BASE_PATH}
-                searchParams={params}
-              />
-              <SortableHead
-                label="Status"
-                column="isActive"
-                currentSort={sort}
-                currentDir={dir}
-                basePath={BASE_PATH}
-                searchParams={params}
-              />
-              <TableHead className="text-right">Aksi</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {result.rows.map((student) => (
-              <TableRow key={student.id}>
-                <TableCell className="font-mono text-xs">
-                  {student.nisn}
-                </TableCell>
-                <TableCell className="font-medium text-slate-900">
-                  {student.name}
-                </TableCell>
-                <TableCell>{student.className ?? "—"}</TableCell>
-                <TableCell>{student.gender}</TableCell>
-                <TableCell>
-                  <div className="flex flex-wrap gap-1">
-                    <Badge variant={student.isActive ? "success" : "neutral"}>
-                      {student.isActive ? "Aktif" : "Nonaktif"}
-                    </Badge>
-                    {student.enrollmentStatus ? (
-                      <Badge variant="primary">
-                        {
-                          ENROLLMENT_STATUS_LABELS[
-                            student.enrollmentStatus as EnrollmentStatus
-                          ]
-                        }
-                      </Badge>
-                    ) : null}
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <div className="flex justify-end gap-2">
-                    <ModalForm
-                      action={saveStudent}
-                      returnTo={returnTo}
-                      triggerLabel="Ubah"
-                      triggerIcon={<Pencil className="h-3.5 w-3.5" />}
-                      triggerVariant="ghost"
-                      triggerSize="sm"
-                      title="Ubah Siswa"
-                      description="Perbarui data siswa."
-                      submitLabel="Simpan Perubahan"
-                    >
-                      <StudentFields student={student} />
-                    </ModalForm>
-                    <form action={deleteStudent}>
-                      <input type="hidden" name="id" value={student.id} />
-                      <input type="hidden" name="returnTo" value={returnTo} />
-                      <ConfirmSubmit
-                        variant="ghost"
-                        size="sm"
-                        className="text-red-600 hover:bg-red-50 hover:text-red-700"
-                        message={`Nonaktifkan siswa ${student.name}? Riwayat absensi tetap tersimpan.`}
-                      >
-                        Nonaktifkan
-                      </ConfirmSubmit>
-                    </form>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))}
-            {result.rows.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={6} className="text-center text-slate-500">
-                  Tidak ada siswa pada filter ini.
-                </TableCell>
-              </TableRow>
-            ) : null}
-          </TableBody>
-        </Table>
+        <StudentTable
+          rows={result.rows.map((student) => ({
+            id: student.id,
+            nisn: student.nisn,
+            name: student.name,
+            gender: student.gender,
+            birthDate: student.birthDate,
+            isActive: student.isActive,
+            className: student.className,
+            enrollmentStatus: student.enrollmentStatus,
+          }))}
+          returnTo={returnTo}
+          basePath={BASE_PATH}
+          searchParams={params}
+          sort={sort}
+          dir={dir}
+          saveAction={saveStudent}
+          statusAction={setStudentStatus}
+          bulkAction={bulkSetStudentStatus}
+        />
         <Pagination
           basePath={BASE_PATH}
           searchParams={params}

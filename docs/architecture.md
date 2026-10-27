@@ -289,7 +289,8 @@ Ketentuan:
 - Parsing file dilakukan di `lib/excel/*` dengan direktif `server-only`, bukan di komponen atau action.
 - Batasi tipe file, ukuran, dan jumlah baris sebelum parsing.
 - Validasi seluruh baris terlebih dahulu; jika ada baris error, batalkan import sebelum memanggil data-access.
-- Insert massal dan audit dijalankan dalam satu transaksi `getDbPool()`.
+- Import siswa dapat sekaligus membuat enrollment bila kolom Kelas diisi; nama kelas divalidasi terhadap kelas pada tahun ajaran terpilih.
+- Insert siswa, insert/reactivate enrollment, dan audit dijalankan dalam satu transaksi `getDbPool()`.
 - Unduh template memakai route handler terpisah dan tetap memeriksa permission.
 
 ### Format state

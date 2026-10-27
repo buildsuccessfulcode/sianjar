@@ -1,6 +1,6 @@
 # Implementation Status — SiJAR
 
-Terakhir diperbarui: 2026-10-26.
+Terakhir diperbarui: 2026-10-27.
 
 Dokumen ini mencatat apa yang sudah diimplementasikan, apa yang belum, dan batasan yang diketahui. Perbarui setiap menyelesaikan milestone.
 
@@ -35,8 +35,8 @@ Dokumen ini mencatat apa yang sudah diimplementasikan, apa yang belum, dan batas
 | Pencarian, filter, sorting server-side | ✅ | Master, jadwal, jurnal, rekap, audit, promosi |
 | Pagination server-side + per-page | ✅ | Default 20, opsi 10/20/50/100 |
 | Grouping daftar | ✅ | Jadwal per hari, jurnal per tanggal, rekap per kelas, jam per jenis |
-| Bulk aksi | ✅ | Enrollment massal + ubah status massal; mapping mapel massal |
-| Import Excel siswa | ✅ P1 | Template `.xlsx`, validasi baris, lewati NISN terdaftar, audit |
+| Bulk aksi | ✅ | Enrollment massal + ubah status massal; mapping mapel massal; status aktif/nonaktif siswa massal |
+| Import Excel siswa | ✅ P1 | Template `.xlsx` + kolom Kelas opsional, import siswa + enrollment transaksional, validasi baris, audit |
 | Override promosi per siswa | ❌ P1 | Mapping per kelas; backend mendukung status per enrollment |
 | Edit jurnal window 7 hari | ❌ P1 | Saat ini tanpa batas |
 
@@ -175,7 +175,7 @@ Seed sudah dijalankan pada database yang terhubung. Sebelum pilot, uji:
 8. **Notifikasi** hanya banner dashboard; belum ada notifikasi in-app persisten.
 9. **UI primitives** lokal, bukan paket shadcn/ui/Radix. Dialog memakai `window.confirm`.
 10. **Timezone**: tanggal hari ini memakai `Asia/Jakarta`; server dan DB harus konsisten menggunakan date string.
-11. **Filter status master data**: data soft-deleted tetap disembunyikan; filter aktif/nonaktif hanya menjangkau data yang belum dihapus.
+11. **Filter status master data**: aksi nonaktifkan guru/siswa mengubah `is_active` tanpa soft delete, sehingga baris tetap muncul pada filter Nonaktif. Baris lama yang sudah soft-deleted tetap dapat muncul pada filter Nonaktif dan dapat diaktifkan kembali melalui edit atau aksi massal siswa.
 12. **Susunan jam**: satu susunan dipakai untuk semua hari dalam semester. Variasi per hari (mis. Jumat lebih pendek) belum didukung; kandidat P1.
 13. **Kalender**: menampilkan jadwal mingguan, belum menampilkan status jurnal per tanggal. Status jurnal tetap dilihat di dashboard/jurnal.
 14. **Nomor jam**: `schedules.period_start`/`period_end` harus mengacu nomor jam yang ada di susunan jam agar blok tampil pada posisi waktu yang tepat. Jika tidak ada, kalender memakai perkiraan slot terdekat.

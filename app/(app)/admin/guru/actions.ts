@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 
 import {
   createTeacher,
-  softDeleteTeacher,
+  setTeacherActive,
   updateTeacher,
 } from "@/data-access/master";
 import { assertPermission } from "@/lib/dal";
@@ -81,13 +81,23 @@ export async function saveTeacher(
   );
 }
 
-export async function deleteTeacher(formData: FormData) {
+export async function setTeacherStatus(formData: FormData) {
+  const isActive = formData.get("isActive") === "true";
   try {
     await assertPermission("manage:master_data");
-    await softDeleteTeacher(String(formData.get("id")));
+    await setTeacherActive(String(formData.get("id")), isActive);
   } catch (error) {
     redirect(redirectWithFlash(formData, PATH, "error", errorMessage(error)));
   }
   revalidatePath(PATH);
-  redirect(redirectWithFlash(formData, PATH, "success", "Guru dinonaktifkan."));
+  revalidatePath("/guru-mapel");
+  revalidatePath("/jadwal");
+  redirect(
+    redirectWithFlash(
+      formData,
+      PATH,
+      "success",
+      `Guru ${isActive ? "diaktifkan" : "dinonaktifkan"}.`,
+    ),
+  );
 }
