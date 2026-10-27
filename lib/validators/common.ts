@@ -13,7 +13,7 @@ export const optionalUuid = z
 export const optionalText = z
   .string()
   .trim()
-  .optional()
+  .nullish()
   .transform((value) => (value ? value : undefined));
 
 export const dateString = z
