@@ -5,6 +5,8 @@ import { redirect } from "next/navigation";
 
 import {
   createTeacher,
+  DEFAULT_RESET_PASSWORD,
+  resetTeacherPassword as resetTeacherPasswordRecord,
   setTeacherActive,
   updateTeacher,
 } from "@/data-access/master";
@@ -77,6 +79,25 @@ export async function saveTeacher(
       PATH,
       "success",
       id ? "Guru berhasil diperbarui." : "Guru berhasil ditambahkan.",
+    ),
+  );
+}
+
+export async function resetTeacherPassword(formData: FormData) {
+  const id = String(formData.get("id") ?? "");
+  try {
+    const actor = await assertPermission("manage:master_data");
+    await resetTeacherPasswordRecord(id, actor.id);
+  } catch (error) {
+    redirect(redirectWithFlash(formData, PATH, "error", errorMessage(error)));
+  }
+  revalidatePath(PATH);
+  redirect(
+    redirectWithFlash(
+      formData,
+      PATH,
+      "success",
+      `Password guru berhasil direset ke ${DEFAULT_RESET_PASSWORD}.`,
     ),
   );
 }

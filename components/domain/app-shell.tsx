@@ -16,6 +16,7 @@ import {
   ClipboardList,
   GraduationCap,
   History,
+  KeyRound,
   LayoutDashboard,
   Link2,
   LogOut,
@@ -28,7 +29,7 @@ import {
   X,
 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import type { Role } from "@/db/schema/enums";
 import { hasPermission } from "@/lib/permissions";
 import { cn, initials } from "@/lib/utils";
@@ -159,6 +160,7 @@ const sections: NavSection[] = [
 
 const pageTitles: Record<string, string> = {
   "/jadwal/jam": "Susunan Jam",
+  "/akun/password": "Ubah Password",
 };
 
 function isActive(pathname: string, href: string) {
@@ -385,7 +387,18 @@ export function AppShell({
                   <p className="truncate text-xs text-slate-500">{label}</p>
                 </div>
               </div>
-              <form action={logout} className="mt-3">
+              <Link
+                href="/akun/password"
+                onClick={() => setOpen(false)}
+                className={cn(
+                  buttonVariants({ variant: "secondary" }),
+                  "mt-3 w-full justify-center",
+                )}
+              >
+                <KeyRound className="h-4 w-4" />
+                Ubah Password
+              </Link>
+              <form action={logout} className="mt-2">
                 <Button
                   type="submit"
                   variant="secondary"
@@ -473,6 +486,15 @@ export function AppShell({
                   </p>
                   <p className="truncate text-xs text-slate-500">{label}</p>
                 </div>
+                <Link
+                  href="/akun/password"
+                  role="menuitem"
+                  onClick={() => setUserMenuOpen(false)}
+                  className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-100"
+                >
+                  <KeyRound className="h-4 w-4" />
+                  Ubah Password
+                </Link>
                 <form action={logout}>
                   <button
                     type="submit"

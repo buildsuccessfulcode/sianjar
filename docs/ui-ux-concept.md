@@ -292,9 +292,10 @@ Pola halaman konsisten:
 1. Judul + deskripsi + tombol “Tambah”.
 2. Bar filter: pencarian teks, filter kontekstual (tahun ajaran, jurusan, kelas, mapel, status), tombol **Terapkan** dan **Reset**.
 3. Ringkasan jumlah data, sorting per kolom (klik judul kolom), grouping bila relevan, pagination server-side, dan pilihan 10/20/50/100 baris per halaman.
-4. Tabel dengan aksi Edit / Nonaktifkan.
-5. Form tambah/edit tampil di modal popup di atas daftar; modal menutup otomatis setelah berhasil.
-6. Konfirmasi hapus/nonaktifkan memakai modal konfirmasi.
+4. Tabel dengan menu aksi tiga titik; klik ikon membuka pilihan Ubah, Reset Password (khusus guru), dan Nonaktifkan/Aktifkan.
+5. Aksi **Reset Password** guru memakai konfirmasi; password direset ke `test1234` dan dicatat di audit log.
+6. Form tambah/edit tampil di modal popup di atas daftar; modal menutup otomatis setelah berhasil.
+7. Konfirmasi hapus/nonaktifkan memakai modal konfirmasi.
 
 Filter, sorting, dan pagination disimpan di query string agar dapat di-bookmark dan tidak hilang saat refresh. Pencarian dan filter dijalankan di server; halaman tidak menarik seluruh isi tabel.
 
@@ -348,6 +349,15 @@ Siswa yang sudah terdaftar pada tahun ajaran ini dilewati.
 - Daftar mapping memiliki pencarian guru/mapel, filter guru/mapel, sorting, dan pagination.
 - **Mapping Massal** memilih satu guru dan beberapa mapel sekaligus; mapping yang sudah ada dilewati.
 
+### 4.8 Ubah Password
+
+- User menu di top bar (dan footer drawer mobile) memiliki tautan **Ubah Password** ke `/akun/password`.
+- Halaman berisi satu card **Keamanan Akun**: password saat ini, password baru, dan konfirmasi password baru.
+- Setiap field password memiliki tombol ikon mata untuk menampilkan/menyembunyikan isi field.
+- Password baru minimal 8 karakter dan harus berbeda dari password saat ini.
+- Berhasil mengubah password menampilkan toast sukses; tidak memaksa logout, tetapi login berikutnya wajib memakai password baru.
+- Password saat ini salah ditampilkan sebagai pesan error pada form tanpa membocorkan detail hash.
+
 ---
 
 ## 5. Komponen Inventory
@@ -359,6 +369,7 @@ Siswa yang sudah terdaftar pada tahun ajaran ini dilewati.
 | `Card` | `components/ui/card.tsx` | Container konten |
 | `Button` | `components/ui/button.tsx` | Varian primary, secondary, ghost, danger |
 | `Input`, `Textarea`, `Select` | `components/ui/form.tsx` | Form primitives dengan label/error |
+| `PasswordInput` | `components/ui/form.tsx` | Input password dengan toggle tampil/sembunyi |
 | `Badge` / `StatusPill` | `components/ui/badge.tsx` | Status berwarna + teks |
 | `Table` | `components/ui/table.tsx` | Tabel data responsive; `TableGroupRow` untuk grouping |
 | `FilterBar` | `components/ui/filter-bar.tsx` | Bar filter GET dengan tombol Terapkan/Reset |

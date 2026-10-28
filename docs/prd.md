@@ -85,6 +85,7 @@ Aplikasi dirancang untuk berjalan di stack gratis pada tahap pilot: Vercel Hobby
 - Login gagal menampilkan pesan generik: “Email atau password salah.”
 - Session JWT bertahan 7 hari dan disimpan pada cookie httpOnly.
 - Setelah login, pengguna diarahkan ke `/dashboard`.
+- Pengguna dapat mengubah password sendiri melalui menu akun dengan memverifikasi password saat ini; password baru minimal 8 karakter dan harus berbeda dari password lama.
 - Logout menghapus cookie session.
 - User nonaktif (`is_active = false`) atau soft-deleted tidak bisa login.
 
@@ -177,6 +178,7 @@ Aplikasi dirancang untuk berjalan di stack gratis pada tahap pilot: Vercel Hobby
 - Soft delete (`deleted_at`) untuk entitas yang punya relasi historis; data yang di-soft-delete tidak ditampilkan pada daftar operasional. Daftar menyediakan filter status aktif/nonaktif.
 - Menonaktifkan guru/siswa mengubah `is_active` tanpa soft delete agar tetap dapat ditemukan lewat filter Nonaktif.
 - Master siswa mendukung aksi massal untuk mengaktifkan atau menonaktifkan beberapa siswa pada halaman aktif.
+- Admin dapat mereset password akun guru ke `test1234` dari daftar guru; aksi dikonfirmasi dan dicatat di audit log.
 - Master data yang sudah direferensikan tidak di-hard-delete.
 - Semua daftar master mendukung pencarian server-side, filter, sorting, pagination, dan pilihan jumlah baris per halaman.
 - Validasi unik: nama tahun ajaran, kode jurusan, kode mapel, NISN, NIP, email user, dan kombinasi kelas.
@@ -202,6 +204,7 @@ Prioritas: **P0** wajib v1, **P1** nice-to-have, **P2** roadmap.
 - Email/password dengan bcrypt (cost 10).
 - Auth.js v5 Credentials provider, JWT session 7 hari, cookie httpOnly.
 - Multi-role via `user_roles`.
+- Pengguna dapat mengganti password default akun sendiri (verifikasi password lama, password baru minimal 8 karakter, tercatat di audit log).
 - `assertPermission(permission)` di data access layer dan setiap server action.
 - Session diperbarui dari DB pada saat login; user nonaktif ditolak.
 

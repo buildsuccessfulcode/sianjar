@@ -1,8 +1,7 @@
 ﻿import type { Metadata } from "next";
-import { Pencil, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import { ConfirmSubmit } from "@/components/ui/confirm-submit";
 import { FilterBar } from "@/components/ui/filter-bar";
 import { Checkbox, Field, Input, Select, Textarea } from "@/components/ui/form";
 import { ListQueryHidden } from "@/components/ui/list-query-hidden";
@@ -20,6 +19,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
+  DEFAULT_RESET_PASSWORD,
   listSubjects,
   listTeacherSubjectsByTeacherIds,
   listTeachersPaged,
@@ -32,7 +32,8 @@ import {
   resolveDirection,
   resolveSort,
 } from "@/lib/pagination";
-import { saveTeacher, setTeacherStatus } from "./actions";
+import { TeacherRowActions } from "./row-actions";
+import { saveTeacher } from "./actions";
 
 export const metadata: Metadata = { title: "Guru" };
 export const dynamic = "force-dynamic";
@@ -291,52 +292,19 @@ export default async function TeacherPage({
                   </Badge>
                 </TableCell>
                 <TableCell>
-                  <div className="flex justify-end gap-2">
-                    <ModalForm
-                      action={saveTeacher}
-                      returnTo={returnTo}
-                      triggerLabel="Ubah"
-                      triggerIcon={<Pencil className="h-3.5 w-3.5" />}
-                      triggerVariant="ghost"
-                      triggerSize="sm"
-                      title="Ubah Guru"
-                      description="Perbarui profil, status akun, dan mapping mapel."
-                      submitLabel="Simpan Perubahan"
-                    >
-                      <TeacherFields
-                        teacher={teacher}
-                        subjects={subjects}
-                        subjectIds={
-                          subjectIdsByTeacher.get(teacher.id) ?? new Set()
-                        }
-                      />
-                    </ModalForm>
-                    <form action={setTeacherStatus}>
-                      <input type="hidden" name="id" value={teacher.id} />
-                      <input type="hidden" name="returnTo" value={returnTo} />
-                      <input
-                        type="hidden"
-                        name="isActive"
-                        value={teacher.isActive ? "false" : "true"}
-                      />
-                      <ConfirmSubmit
-                        variant="ghost"
-                        size="sm"
-                        className={
-                          teacher.isActive
-                            ? "text-red-600 hover:bg-red-50 hover:text-red-700"
-                            : "text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700"
-                        }
-                        message={
-                          teacher.isActive
-                            ? `Nonaktifkan akun guru ${teacher.name}? Riwayat jurnal tetap tersimpan.`
-                            : `Aktifkan kembali akun guru ${teacher.name}?`
-                        }
-                      >
-                        {teacher.isActive ? "Nonaktifkan" : "Aktifkan"}
-                      </ConfirmSubmit>
-                    </form>
-                  </div>
+                  <TeacherRowActions
+                    teacher={teacher}
+                    returnTo={returnTo}
+                    resetPassword={DEFAULT_RESET_PASSWORD}
+                  >
+                    <TeacherFields
+                      teacher={teacher}
+                      subjects={subjects}
+                      subjectIds={
+                        subjectIdsByTeacher.get(teacher.id) ?? new Set()
+                      }
+                    />
+                  </TeacherRowActions>
                 </TableCell>
               </TableRow>
             ))}

@@ -105,6 +105,7 @@ data-access/                    query + aturan bisnis + otorisasi
   time-slots.ts                  susunan jam, istirahat, sholat
   journals.ts
   promotions.ts
+  account.ts                     ubah password akun sendiri
   audit.ts
 
 scripts/

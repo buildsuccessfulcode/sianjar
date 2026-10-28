@@ -12,10 +12,12 @@ Dokumen ini mencatat apa yang sudah diimplementasikan, apa yang belum, dan batas
 |---|---|---|
 | Fondasi Next.js 16 + Tailwind 4 | ✅ | App Router, Server Components, Server Actions |
 | Auth.js v5 Credentials + JWT | ✅ | Session 7 hari, multi-role, login generik |
+| Ubah password mandiri | ✅ | Verifikasi password lama, password baru minimal 8 karakter, audit log |
 | RBAC matrix + ownership checks | ✅ | Permission matrix, cek kepemilikan jurnal/jadwal |
 | Schema database + migration | ✅ | 18 tabel, enum, index, partial unique index |
 | Seed data pilot | ✅ | Excel 2026/2027: 18 guru, 6 kelas, 26 mapel, 109 blok jadwal, siswa dummy |
 | Master data CRUD | ✅ | Tahun ajaran, semester, jurusan, kelas, mapel, guru, siswa |
+| Reset password guru | ✅ | Admin reset ke `test1234` dari daftar guru, dengan konfirmasi + audit |
 | Enrollment manual | ✅ | Create satuan/massal, edit kelas/status, pindah kelas massal, ubah status massal, reaktivasi, validasi tahun kelas |
 | Mapping guru–mapel | ✅ | Tambah/hapus mapping + mapping massal satu guru banyak mapel |
 | Jadwal CRUD + validasi bentrok | ✅ | Overlap guru/kelas, mapping mapel, ownership |
@@ -28,7 +30,7 @@ Dokumen ini mencatat apa yang sudah diimplementasikan, apa yang belum, dan batas
 | Riwayat/detail jurnal | ✅ | Daftar hadir lengkap, statistik |
 | Rekap absensi + CSV | ✅ | Filter tanggal/kelas/mapel, batas guru |
 | Naik kelas | ✅ | Pratinjau, commit atomik, cancel, audit |
-| Audit log | ✅ | Jadwal, promosi, aktivasi tahun/semester |
+| Audit log | ✅ | Jadwal, promosi, aktivasi tahun/semester, ubah password |
 | Responsive AppShell | ✅ | Sidebar desktop, drawer mobile |
 | Toast & modal feedback | ✅ | Toast global, form tambah/edit di modal, konfirmasi aksi di modal |
 | Cache Components | ⛔ sengaja dimatikan | Dashboard dynamic |
@@ -55,6 +57,7 @@ Dokumen ini mencatat apa yang sudah diimplementasikan, apa yang belum, dan batas
 - `components/domain/app-shell.tsx` — navigasi per role.
 - `app/(app)/layout.tsx` — guard session + shell.
 - `app/(app)/actions.ts` — logout.
+- `app/(app)/akun/password/*` — halaman + server action ubah password.
 
 ### Database
 
@@ -78,6 +81,7 @@ Dokumen ini mencatat apa yang sudah diimplementasikan, apa yang belum, dan batas
 - `data-access/time-slots.ts` — susunan jam, istirahat, sholat, validasi overlap.
   - `data-access/journals.ts` — simpan jurnal, detail, rekap (paged, total, per kelas).
 - `data-access/promotions.ts` — pratinjau, commit, cancel, riwayat.
+- `data-access/account.ts` — ubah password akun sendiri.
 - `data-access/audit.ts` — list audit.
 
 ### UI
@@ -94,6 +98,7 @@ Dokumen ini mencatat apa yang sudah diimplementasikan, apa yang belum, dan batas
 |---|---|
 | `/login` | publik |
 | `/dashboard` | semua user login |
+| `/akun/password` | semua user login |
 | `/jadwal` | semua (guru: jadwal sendiri; Admin/Waka: kelola semua) |
 | `/jadwal/jam` | Admin, Waka |
 | `/jurnal` | semua (guru: milik sendiri) |

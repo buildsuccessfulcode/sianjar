@@ -99,6 +99,8 @@ export type StudentImportResult = {
   skipped: { nisn: string; name: string; reason: string }[];
 };
 
+export const DEFAULT_RESET_PASSWORD = "test1234";
+
 export async function listAcademicYears() {
   return getDb()
     .select()
@@ -710,6 +712,39 @@ export async function setTeacherActive(id: string, isActive: boolean) {
     .where(eq(users.id, id))
     .returning();
   if (!row) throw new NotFoundError("Guru tidak ditemukan.");
+}
+
+export async function resetTeacherPassword(id: string, actorId: string) {
+  const passwordHash = await bcrypt.hash(DEFAULT_RESET_PASSWORD, 10);
+
+  await getDbPool().transaction(async (tx) => {
+    const [teacher] = await tx
+      .select({ id: users.id })
+      .from(users)
+      .innerJoin(userRoles, eq(userRoles.userId, users.id))
+      .where(
+        and(
+          eq(users.id, id),
+          eq(userRoles.role, "GURU"),
+          isNull(users.deletedAt),
+        ),
+      )
+      .limit(1);
+
+    if (!teacher) throw new NotFoundError("Guru tidak ditemukan.");
+
+    await tx
+      .update(users)
+      .set({ passwordHash, updatedAt: new Date() })
+      .where(eq(users.id, id));
+
+    await writeAudit(tx, {
+      actorId,
+      action: "teacher.reset_password",
+      entityType: "user",
+      entityId: id,
+    });
+  });
 }
 
 export async function listTeacherSubjects(teacherId?: string) {
