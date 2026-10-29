@@ -25,7 +25,7 @@ Dokumen ini menjelaskan bagaimana kode disusun dan aturan yang harus diikuti saa
 - **Cache Components dimatikan.** Dashboard bergantung pada session dan data real-time. `next.config.ts` tidak mengaktifkan `cacheComponents`/`partialPrefetching`. Halaman dashboard memakai dynamic rendering.
 - **Tidak memakai `middleware`/`proxy` untuk otorisasi.** Semua proteksi dilakukan di server component/data access/server action sesuai rekomendasi Next.js. Redirect optimistik ditangani `getCurrentUser()` di DAL.
 - **Tidak memakai Auth.js adapter.** Sesi JWT; `users` dan `user_roles` dibaca pada saat authorize/login. Ini menghindari tabel adapter tambahan.
-- **Server Actions adalah mutation layer.** Tidak ada route API CRUD kecuali export CSV dan unduh template import. Server Action upload memakai `bodySizeLimit: "6mb"` (file dibatasi 5 MB).
+- **Server Actions adalah mutation layer.** Tidak ada route API CRUD kecuali export Excel rekap absensi dan unduh template import. Server Action upload memakai `bodySizeLimit: "6mb"` (file dibatasi 5 MB).
 - **Form menggunakan native form + `useActionState`/`useFormStatus`.** Zod adalah sumber validasi tunggal.
 
 ---
@@ -96,6 +96,7 @@ lib/
   utils.ts                       cn(), format helper
   pagination.ts                  parse page/perPage/sort + metadata + URL builder
   excel/students.ts              template + parsing Excel import siswa (server-only)
+  excel/attendance-recap.ts      builder workbook laporan analitik rekap absensi (server-only)
   validators/                    schema Zod per domain
   audit.ts                       helper pencatatan audit
 

@@ -1,23 +1,17 @@
 import { auth } from "@/lib/auth";
-import { getAttendanceRecap } from "@/data-access/journals";
+import { getAttendanceRecapAnalytics } from "@/data-access/journals";
 import {
   listTeacherScheduleClassIds,
   listTeacherScheduleSubjectIds,
 } from "@/data-access/schedules";
 import { monthRange, todayInJakarta } from "@/lib/date";
+import { buildAttendanceRecapWorkbook } from "@/lib/excel/attendance-recap";
 import { hasPermission } from "@/lib/permissions";
+import { classLabel } from "@/lib/utils";
 import type { Role } from "@/db/schema/enums";
 
 export const dynamic = "force-dynamic";
-
-function csvCell(value: string | number) {
-  const raw = String(value);
-  const text = /^[=+\-@]/.test(raw) ? `'${raw}` : raw;
-  if (/[",\n]/.test(text)) {
-    return `"${text.replaceAll('"', '""')}"`;
-  }
-  return text;
-}
+export const runtime = "nodejs";
 
 export async function GET(request: Request) {
   const session = await auth();
@@ -54,7 +48,7 @@ export async function GET(request: Request) {
     classIds = teacherClassIds;
   }
 
-  const rows = await getAttendanceRecap({
+  const analytics = await getAttendanceRecapAnalytics({
     dateFrom,
     dateTo,
     classId,
@@ -63,40 +57,32 @@ export async function GET(request: Request) {
     q,
   });
 
-  const header = [
-    "Nama Siswa",
-    "NISN",
-    "Kelas",
-    "Sakit",
-    "Izin",
-    "Alpa",
-    "Dispensasi",
-    "Total Tidak Hadir",
-  ];
+  const classFilter = classId
+    ? analytics.byClass[0]
+      ? classLabel(analytics.byClass[0])
+      : classId
+    : "Semua kelas";
+  const subjectFilter = subjectId
+    ? analytics.bySubject.find((row) => row.subjectId === subjectId)
+        ?.subjectName ?? subjectId
+    : "Semua mapel";
 
-  const lines = [
-    header.join(","),
-    ...rows.map((row) =>
-      [
-        row.studentName,
-        row.nisn,
-        `${row.gradeLevel} ${row.departmentCode} ${row.section}`.trim(),
-        row.sakit,
-        row.izin,
-        row.alpa,
-        row.dispensasi,
-        row.total,
-      ]
-        .map(csvCell)
-        .join(","),
-    ),
-  ];
+  const file = await buildAttendanceRecapWorkbook(analytics, {
+    dateFrom,
+    dateTo,
+    classFilter,
+    subjectFilter,
+    search: q,
+    generatedAt: new Date(),
+  });
 
-  const csv = `\uFEFF${lines.join("\r\n")}`;
-  return new Response(csv, {
+  return new Response(new Uint8Array(file), {
     headers: {
-      "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": `attachment; filename="rekap-absensi-${dateFrom}-${dateTo}.csv"`,
+      "Content-Type":
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "Content-Disposition": `attachment; filename="rekap-absensi-${dateFrom}-${dateTo}.xlsx"`,
+      "Content-Length": String(file.byteLength),
+      "Cache-Control": "no-store",
     },
   });
 }

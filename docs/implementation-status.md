@@ -1,6 +1,6 @@
 # Implementation Status — SiJAR
 
-Terakhir diperbarui: 2026-10-27.
+Terakhir diperbarui: 2026-10-29.
 
 Dokumen ini mencatat apa yang sudah diimplementasikan, apa yang belum, dan batasan yang diketahui. Perbarui setiap menyelesaikan milestone.
 
@@ -28,7 +28,7 @@ Dokumen ini mencatat apa yang sudah diimplementasikan, apa yang belum, dan batas
 | Dashboard guru | ✅ | Jadwal hari ini + status jurnal |
 | Monitoring Waka/Admin | ✅ | Coverage, daftar belum diisi, filter |
 | Riwayat/detail jurnal | ✅ | Daftar hadir lengkap, statistik |
-| Rekap absensi + CSV | ✅ | Filter tanggal/kelas/mapel, batas guru |
+| Rekap absensi + Excel analitik | ✅ | Filter tanggal/kelas/mapel, batas guru, sheet ringkasan/per kelas/per mapel/kelas-mapel/detail siswa/siswa-mapel |
 | Naik kelas | ✅ | Pratinjau, commit atomik, cancel, audit |
 | Audit log | ✅ | Jadwal, promosi, aktivasi tahun/semester, ubah password |
 | Responsive AppShell | ✅ | Sidebar desktop, drawer mobile |
@@ -72,14 +72,16 @@ Dokumen ini mencatat apa yang sudah diimplementasikan, apa yang belum, dan batas
 - `lib/db.ts` — lazy HTTP dan Pool.
 - `lib/audit.ts` — helper audit.
 - `lib/excel/students.ts` — template dan parser import siswa `.xlsx`.
+- `lib/excel/attendance-recap.ts` — builder workbook laporan analitik rekap absensi (ringkasan, per kelas, per mapel, kelas–mapel, detail siswa, siswa–mapel, metodologi).
 - `app/(app)/admin/siswa/template/route.ts` — unduh template import siswa.
+- `app/(app)/rekap/absensi/export/route.ts` — unduh laporan rekap absensi `.xlsx`.
 
 ### Data access
 
 - `data-access/master.ts` — master data + enrollment + mapping.
 - `data-access/schedules.ts` — jadwal, monitoring, form context, copy jadwal + susunan jam antar semester.
 - `data-access/time-slots.ts` — susunan jam, istirahat, sholat, validasi overlap.
-  - `data-access/journals.ts` — simpan jurnal, detail, rekap (paged, total, per kelas).
+  - `data-access/journals.ts` — simpan jurnal, detail, rekap (paged, total, per kelas, analitik per kelas/mapel/siswa).
 - `data-access/promotions.ts` — pratinjau, commit, cancel, riwayat.
 - `data-access/account.ts` — ubah password akun sendiri.
 - `data-access/audit.ts` — list audit.
@@ -105,7 +107,7 @@ Dokumen ini mencatat apa yang sudah diimplementasikan, apa yang belum, dan batas
 | `/jurnal/isi/[scheduleId]` | guru pemilik atau Admin |
 | `/jurnal/[id]` | guru pemilik, Admin, Waka |
 | `/rekap/absensi` | semua (guru: kelas diajar) |
-| `/rekap/absensi/export` | route handler CSV |
+| `/rekap/absensi/export` | route handler Excel (`.xlsx`) |
 | `/guru-mapel` | Admin, Waka |
 | `/promosi` | Admin (commit), Waka (preview) |
 | `/audit` | Admin, Waka |
@@ -165,15 +167,16 @@ Seed sudah dijalankan pada database yang terhubung. Sebelum pilot, uji:
 1. Login tiap role, termasuk akun guru hasil seed.
 2. Alur jurnal end-to-end.
 3. Commit/cancel promosi pada data uji.
-4. Export CSV.
+4. Export Excel rekap absensi (buka di Excel/LibreOffice, cek formula persentase dan filter).
 
 ---
 
 ## 5. Batasan dan Gap
 
 1. **Promosi**: mapping dihitung per kelas; belum ada UI override per siswa. Backend menyimpan status per enrollment dan enum sudah mendukung `TRANSFERRED`/`DROPPED_OUT`.
-2. **Rekap absensi**: hanya menampilkan siswa dengan minimal satu catatan tidak hadir. Siswa yang selalu hadir tidak muncul (dijelaskan di UI).
-3. **Validasi bentrok**: dilakukan di application layer, bukan exclusion constraint PostgreSQL. Untuk konkurensi tinggi, pertimbangkan constraint `btree_gist` atau advisory lock.
+2. **Rekap absensi**: halaman hanya menampilkan siswa dengan minimal satu catatan tidak hadir. Export Excel memuat seluruh siswa aktif pada kelas yang memiliki sesi (termasuk yang selalu hadir) agar persentase kehadiran bisa dihitung.
+3. **Metrik kehadiran**: `attendance_records` hanya menyimpan ketidakhadiran. Kehadiran dihitung sebagai sesi × siswa aktif dikurangi ketidakhadiran, memakai enrollment saat laporan dibuat; siswa yang pindah/keluar di tengah periode dapat membuat angka sedikit berbeda dari kondisi historis.
+4. **Validasi bentrok**: dilakukan di application layer, bukan exclusion constraint PostgreSQL. Untuk konkurensi tinggi, pertimbangkan constraint `btree_gist` atau advisory lock.
 5. **Session**: JWT tidak dicek ulang ke DB setiap request. Menonaktifkan user mencegah login baru, tetapi session lama tetap valid sampai 7 hari.
 6. **Import guru** belum ada; import siswa sudah tersedia dalam format Excel.
 7. **Testing otomatis** belum ada. Verifikasi saat ini typecheck, lint, build, dan uji manual.

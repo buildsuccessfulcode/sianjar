@@ -255,7 +255,15 @@ Kalender Mingguan · Ganjil 2026/2027
 - Filter bar: dari, sampai, kelas, mapel.
 - Ringkasan total ketidakhadiran.
 - Tabel: siswa, NISN, kelas, sakit, izin, alpa, dispensasi, total.
-- Tombol “Export CSV” menghasilkan file sesuai filter.
+- Tombol “Export Excel” menghasilkan file `.xlsx` sesuai filter dengan sheet:
+  - **Ringkasan** — ikhtisar metrik, rincian status, kelas dan siswa dengan kehadiran terendah.
+  - **Rekap per Kelas** — sesi, siswa-sesi, hadir, per status, persentase kehadiran/ketidakhadiran, risiko.
+  - **Rekap per Mapel** — agregat per mata pelajaran.
+  - **Rekap Kelas-Mapel** — kombinasi kelas dan mapel untuk analisis silang.
+  - **Detail Siswa** — seluruh siswa aktif, termasuk yang selalu hadir, dengan persentase dan tingkat risiko.
+  - **Rekap Siswa-Mapel** — satu baris per siswa per mata pelajaran, untuk melihat mapel mana yang paling banyak menyebabkan ketidakhadiran pada siswa tertentu.
+  - **Metodologi** — definisi metrik, asumsi, dan keterbatasan.
+- Persentase kehadiran dihitung dari sesi jurnal × siswa aktif; lihat sheet Metodologi.
 - Guru dibatasi pada kelas/mapel yang diajar.
 
 ### 4.6 Alur Naik Kelas

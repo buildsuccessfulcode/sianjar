@@ -174,10 +174,11 @@ export default async function AttendanceReportPage({
         actions={
           <a
             href={`/rekap/absensi/export?${query.toString()}`}
+            title="Unduh laporan Excel: ringkasan, per kelas, per mapel, dan detail siswa"
             className={buttonVariants({ variant: "secondary" })}
           >
             <Download className="h-4 w-4" />
-            Export CSV
+            Export Excel
           </a>
         }
       />

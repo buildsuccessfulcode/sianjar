@@ -153,7 +153,7 @@ Aplikasi dirancang untuk berjalan di stack gratis pada tahap pilot: Vercel Hobby
 - Filter: rentang tanggal, kelas, mapel.
 - Kolom: siswa, NISN, kelas, sakit, izin, alpa, dispensasi, total tidak hadir.
 - Guru hanya melihat kelas/mapel yang diajar.
-- Export CSV mengikuti filter yang sama.
+- Export Excel (`.xlsx`) mengikuti filter yang sama, berisi ringkasan, rekap per kelas, rekap per mapel, rekap kelas–mapel, detail siswa, rekap siswa–mapel, dan persentase kehadiran/ketidakhadiran.
 
 ### US-07 Naik Kelas
 
@@ -260,7 +260,8 @@ Prioritas: **P0** wajib v1, **P1** nice-to-have, **P2** roadmap.
 - Rekap absensi per siswa/kelas/mapel/periode.
 - Ringkasan rekap per kelas, pencarian siswa, sorting, dan pagination server-side.
 - Rekap jurnal per guru/periode.
-- Export CSV rekap absensi mengikuti seluruh filter aktif (termasuk pencarian).
+- Export Excel (`.xlsx`) rekap absensi mengikuti seluruh filter aktif, dengan sheet ringkasan, per kelas, per mapel, kelas–mapel, detail siswa, siswa–mapel (termasuk pencarian), dan metodologi.
+- Metrik analitik: sesi/jurnal, siswa-sesi potensial, tingkat kehadiran, tingkat ketidakhadiran, persentase per status, dan tingkat risiko siswa/kelas.
 - Dashboard monitoring coverage harian.
 
 ### FR-07 Audit Log — P1 (diimplementasikan untuk aksi kritis)
@@ -314,7 +315,7 @@ Prioritas: **P0** wajib v1, **P1** nice-to-have, **P2** roadmap.
 | Keamanan | bcrypt, cookie httpOnly, CSRF bawaan Server Actions/Auth.js, otorisasi di DAL/action |
 | Aksesibilitas | WCAG 2.1 AA untuk alur utama |
 | Auditabilitas | Aksi kritis tercatat di `audit_logs` |
-| Backup | Neon PITR sesuai tier + export CSV rekap |
+| Backup | Neon PITR sesuai tier + export Excel rekap |
 | Zona waktu | Tanggal “hari ini” dihitung pada `Asia/Jakarta` |
 
 ---
@@ -340,7 +341,7 @@ Prioritas: **P0** wajib v1, **P1** nice-to-have, **P2** roadmap.
 | **M1 Jadwal** | CRUD jadwal, susunan jam + istirahat/sholat, kalender responsif, validasi bentrok | Selesai |
 | **M2 Jurnal + Absensi** | Alur guru, transaksi atomik, monitoring, riwayat | Selesai |
 | **M3 Naik Kelas** | Mapping, pratinjau, commit, cancel, audit | Selesai (override per siswa P1) |
-| **M4 Rekap + Laporan** | Rekap absensi, coverage jurnal, export CSV | Selesai |
+| **M4 Rekap + Laporan** | Rekap absensi, coverage jurnal, export Excel analitik | Selesai |
 | **M5 Pilot** | UAT, perbaikan, dokumentasi | Belum |
 
 ---
